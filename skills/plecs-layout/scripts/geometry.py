@@ -43,7 +43,8 @@ _TABLE = _load()
 def variant_of(kind: str, params: dict) -> str:
     """Variant key for blocks whose size depends on a parameter (as in the calibration sheet)."""
     if kind == "Sum":
-        return f"{max(1, len(params.get('Inputs', '|++').replace('|', '')))}in"
+        n = sum(ch in "+-" for ch in params.get("Inputs", "|++"))
+        return f"{n}in" + ("_round" if params.get("IconShape", "2") == "2" else "")
     if kind == "Product":
         return f"{params.get('Inputs', '2')}in"
     if kind in ("SignalMux", "SignalDemux"):

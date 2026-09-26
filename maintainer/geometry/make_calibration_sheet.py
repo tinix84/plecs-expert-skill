@@ -49,7 +49,10 @@ TYPES = [
     ("Delay", "", {}), ("PeriodicAverage", "", {}), ("Function", "", {}), ("ToFile", "", {}),
     ("RelationalOperator", "", {}), ("ConstantRelationalOperator", "", {}), ("LogicalOperator", "", {}),
     ("SignalSwitch", "", {}), ("MinMax", "", {}), ("Relay", "", {}), ("Display", "", {}),
-    ("Sum", "2in", {"Inputs": "|+-"}), ("Sum", "3in", {"Inputs": "|++-"}), ("Sum", "4in", {"Inputs": "|+++-"}),
+    # Round Sum icons (IconShape 2) take at most 3 positions, spacer "|" included.
+    ("Sum", "2in_round", {"IconShape": "2", "Inputs": "|+-"}), ("Sum", "3in_round", {"IconShape": "2", "Inputs": "++-"}),
+    ("Sum", "2in", {"IconShape": "1", "Inputs": "+-"}), ("Sum", "3in", {"IconShape": "1", "Inputs": "++-"}),
+    ("Sum", "4in", {"IconShape": "1", "Inputs": "+++-"}),
     ("Product", "2in", {"Inputs": "2"}), ("Product", "3in", {"Inputs": "3"}),
     ("SignalMux", "w2", {"Width": "2"}), ("SignalMux", "w3", {"Width": "3"}), ("SignalMux", "w4", {"Width": "4"}),
     ("SignalDemux", "w2", {"Width": "2"}), ("SignalDemux", "w3", {"Width": "3"}), ("SignalDemux", "w4", {"Width": "4"}),
@@ -59,6 +62,33 @@ TYPES = [
     ("CScript", "2in2out", {"NumInputs": "[1 1]", "NumOutputs": "[1 1]"}),
     ("CScript", "4in2out", {"NumInputs": "[1 1 1 1]", "NumOutputs": "[1 1]"}),
 ]
+
+
+def _count(value):
+    """Number of ports a width parameter gives: "3" -> 3 for Mux/Demux widths, "[1 1]" -> 2."""
+    v = value.strip()
+    return len(v.strip("[]").replace(",", " ").split()) if v.startswith("[") else int(v)
+
+
+def rule_roles(kind, params):
+    """Terminal roles of blocks whose ports depend on parameters (checked on the Plexim demos)."""
+    if kind == "Sum":
+        n = sum(ch in "+-" for ch in params["Inputs"])
+        return {1: "out", **{t: "in" for t in range(2, n + 2)}}
+    if kind == "Product":
+        return {1: "out", **{t: "in" for t in range(2, int(params["Inputs"]) + 2)}}
+    if kind == "SignalMux":
+        return {1: "out", **{t: "in" for t in range(2, int(params["Width"]) + 2)}}
+    if kind == "SignalDemux":
+        return {1: "in", **{t: "out" for t in range(2, int(params["Width"]) + 2)}}
+    if kind == "CScript":
+        # A scalar NumInputs is one (possibly wide) terminal; a vector gives one terminal per entry.
+        ni = 1 if not params["NumInputs"].startswith("[") else _count(params["NumInputs"])
+        no = 1 if not params["NumOutputs"].startswith("[") else _count(params["NumOutputs"])
+        return {**{t: "in" for t in range(1, ni + 1)}, **{t: "out" for t in range(ni + 1, ni + no + 1)}}
+    if kind == "Scope":
+        return {t: "in" for t in range(1, int(params["@Axes"]) + 1)}
+    return None
 
 
 def walk(sch, path=""):
@@ -158,10 +188,15 @@ def main(argv=None):
                 index.append({"name": name, "type": kind, "variant": variant, "params": params,
                               "direction": direction, "flipped": flipped, "position": pos, "numbered": None})
                 col += 1
-        terms = sorted({int(t) for (tk, t) in kinds if tk == kind and t and t.isdigit()})
-        for term in terms:
-            seen = kinds[(kind, str(term))]
-            role = "elec" if seen["elec"] else seen.most_common(1)[0][0]
+        ruled = rule_roles(kind, params) if params else None
+        if ruled:
+            roles = ruled
+        else:
+            roles = {}
+            for (tk, t), seen in kinds.items():
+                if tk == kind and t and t.isdigit():
+                    roles[int(t)] = "elec" if seen["elec"] else seen.most_common(1)[0][0]
+        for term, role in sorted(roles.items()):
             name = f"k{n:04d}"
             n += 1
             pos = (100 + col * PITCH_X, y)
