@@ -72,6 +72,17 @@ A probe refers to a component by name (and `Path` for another subsystem), so it 
 - In the demos, the leg from a terminal to the nearest Point often differs on both axes. PLECS draws that leg with its own corner. This is inferred from the demos, not from the manual: segments between two explicit Points are always horizontal or vertical there.
 - Dragging a block so that its terminal lands on a wire, or a wire onto a terminal, joins the nets (manual, "Connections"). This is the "joined when moved" failure. Keep foreign wires out of a block's area.
 
+## Terminal numbers that matter for tags
+
+| Block | Terminals |
+|-------|-----------|
+| Ammeter | 1, 2 electrical; 3 signal output (measured current) |
+| Voltmeter | 1, 2 electrical; 3 signal output (measured voltage) |
+| Goto | 1 signal input |
+| From | 1 signal output |
+| Label | 1 electrical |
+| Diode | 1 anode, 2 cathode |
+
 ## Terminal geometry
 
 Built-in blocks do not store terminal offsets in the file. On the demos, terminals of single-input/single-output blocks and two-terminal parts lie on the block's centre line (perpendicular offset 0 in 100 % of measured cases for Gain, Constant, From, Goto, Diode, Inductor, Capacitor, PlecsProbe). The offset along the block's axis is not recoverable from text. Multi-port blocks (Sum, Mux, Scope, Subsystem, library `Reference` blocks) have terminals spread over their body.

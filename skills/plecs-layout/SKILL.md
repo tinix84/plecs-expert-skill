@@ -37,10 +37,11 @@ A connection without `Points` is left to PLECS routing, which ignores other bloc
    | Measured value, reference, gate or PWM signal leaving its zone | `Goto` next to the source, `From` next to each user |
    | Signal between neighbouring blocks in one row | short wire |
    | Anything that would cross another wire | tag |
+| Rail shared by many densely packed parts (DC+, DC-, neutral) | electrical `Label` at each part |
 3. **Build the model with `scripts/layout.py`** (`Sheet`, `Zone`, `goto`, `from_`, `label`, `wire`, `signal`, `model`). Or write the text by hand under the same rules. The module docstring shows a complete example.
 4. **Route every wire.** Give `Points` to every connection whose two ends are not on one horizontal or vertical line. Consecutive `Points`, including a branch's first point after its junction, share x or y. Keep wires at least 15 px away from blocks that are not their own ends.
 5. **Lint:** run `python scripts/lint_schematic.py model.plecs`. Fix every error. For every `crossing` or `unrouted` warning, reroute or replace the run with a tag. Run the linter again.
-6. **Load once in PLECS** (GUI, or XML-RPC `plecs.load`) to confirm that it parses and that no tag is left without a partner.
+6. **Simulate once in PLECS** (XML-RPC `plecs.load`, then `plecs.simulate`, then `plecs.close`). Loading alone does not catch missing wires. The simulation's topology check does, and it names overlapping, unconnected terminals.
 
 ## Tag rules
 
@@ -63,6 +64,7 @@ Block keywords: `Goto`, `From`, `Label` (electrical), `PlecsProbe` (reads a comp
 | A shared bus drawn through the middle of other blocks | Route the bus on its own row, or use Labels |
 | `Visibility "1"` used as "local" | `"1"` is global; local is `"2"` |
 | Checking the file by eye only | Run the linter. The drawing looks fine in text and wrong in the GUI. |
+| Stopping at a clean lint | The linter checks geometry, not connectivity. Simulate. |
 
 ## Limits
 

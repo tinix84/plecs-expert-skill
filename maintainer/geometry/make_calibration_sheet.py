@@ -31,6 +31,7 @@ DIRECTIONS = ("right", "down", "left", "up")
 PITCH_X = 140  # cell spacing; larger than any calibrated symbol
 PITCH_Y = 160
 PARTNER_OFFSET = 70  # partner block sits this far from the calibrated block
+FIDUCIAL = 60        # length of the fiducial top edge
 
 # Types to calibrate, with parameter variants for blocks whose size depends on them.
 # (type, variant label, {parameter: value}); a key starting with "@" is a top-level field.
@@ -174,6 +175,22 @@ def main(argv=None):
                           "numbered": {"terminal": term, "role": role, "partner": partner, "partner_position": ppos}})
             col += 1
 
+    # Fiducials: a wire with explicit Points is drawn exactly at those coordinates, so two
+    # U-shaped wires at opposite corners give the PDF-to-schematic scale and offset.
+    max_x = max(c["position"][0] for c in index) + PITCH_X
+    max_y = max(c["position"][1] for c in index) + PITCH_Y
+    fiducials = []
+    for i, (fx, fy) in enumerate(((20, 20), (max_x, max_y))):
+        a, b = f"fidA{i}", f"fidB{i}"
+        sch.items.append(instance(templates["Ground"], a, (fx - 40, fy + 80), "right", False, {}))
+        sch.items.append(instance(templates["Ground"], b, (fx + 80, fy + 80), "right", False, {}))
+        pts = [(fx, fy + 40), (fx, fy), (fx + FIDUCIAL, fy), (fx + FIDUCIAL, fy + 40)]
+        sch.items.append(pf.Block("Connection", [
+            ("Type", "Wire"), ("SrcComponent", json.dumps(a)), ("SrcTerminal", "1"),
+            ("Points", "[" + "; ".join(f"{x}, {y}" for x, y in pts) + "]"),
+            ("DstComponent", json.dumps(b)), ("DstTerminal", "1")]))
+        fiducials.append({"corner": [fx, fy], "points": pts})
+
     model = pf.Block("Plecs", [("Name", '"plecs_geometry_calibration"'), ("Version", '"4.7"'),
                                ("CircuitModel", '"ContStateSpace"'), ("StartTime", '"0.0"'),
                                ("TimeSpan", '"1e-3"'), ("Solver", '"auto"')])
@@ -181,7 +198,7 @@ def main(argv=None):
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "plecs_geometry_calibration.plecs").write_text(pf.dump(model), encoding="utf-8")
     (args.out / "calibration_index.json").write_text(json.dumps({
-        "pitch": [PITCH_X, PITCH_Y], "cells": index, "skipped_types": skipped}, indent=1), encoding="utf-8")
+        "pitch": [PITCH_X, PITCH_Y], "fiducials": fiducials, "cells": index, "skipped_types": skipped}, indent=1), encoding="utf-8")
     print(f"{len(index)} cells, {len(TYPES) - len(skipped)} block variants; skipped (no template): {skipped}")
     print(args.out / "plecs_geometry_calibration.plecs")
 
