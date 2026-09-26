@@ -92,3 +92,24 @@ def test_two_terminal_part_turns_to_face_its_neighbours(fake_geometry):
     nl.net("n2", "Wire", [("R", 2), ("B", 1)])
     nl.layout(zones=["z"])
     assert nl.parts["R"].direction in ("down", "up")
+
+
+def test_sources_are_vertical_and_ground_points_down_under_its_node():
+    # uses the measured geometry.json shipped with the skill
+    nl = autolayout.Netlist()
+    nl.part("Vin", "DCVoltageSource", {"V": "10"}, zone="source")
+    nl.part("R1", "Resistor", {"R": "1"}, zone="power")
+    nl.part("Gnd", "Ground", zone="power")
+    nl.net("in", "Wire", [("Vin", 1), ("R1", 1)])
+    nl.net("gnd", "Wire", [("Vin", 2), ("R1", 2), ("Gnd", 1)])
+    sheet, _ = nl.layout(zones=["source", "power"])
+    vin, gnd = nl.parts["Vin"], nl.parts["Gnd"]
+    plus = geometry.shape("DCVoltageSource", vin.pos, vin.direction, vin.flipped).terminals["1"]
+    minus = geometry.shape("DCVoltageSource", vin.pos, vin.direction, vin.flipped).terminals["2"]
+    assert plus[0] == minus[0] and plus[1] < minus[1]            # vertical, + on top
+    g = geometry.shape("Ground", gnd.pos, gnd.direction, gnd.flipped).terminals["1"]
+    assert g[1] < gnd.pos[1]                                      # terminal on top: symbol points down
+    lowest = max(geometry.shape(p.kind, p.pos, p.direction, p.flipped).terminals[t][1]
+                 for p, t in ((vin, "2"), (nl.parts["R1"], "2")))
+    assert gnd.pos[1] > lowest                                    # below the node it grounds
+    assert [f for f in sheet.lint() if f.severity == "error"] == []

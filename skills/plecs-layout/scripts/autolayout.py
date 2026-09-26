@@ -15,6 +15,9 @@ crossings. Two-terminal parts get the direction that points their terminals at
 their neighbours. Routing uses router.Router; a net that would cross another or
 detour too far becomes a Goto/From pair (signals) or an electrical Label pair.
 
+Sources stand vertical with terminal 1 on top, and every grounded pin gets its own
+Ground symbol pointing down, straight below it (layout() adds Ground parts for this).
+
 Terminal positions come from geometry.json. Without measured geometry for a block
 the result is only approximate; `report["unmeasured"]` lists those blocks.
 """
@@ -34,6 +37,13 @@ ORIENTATIONS = [(d, f) for d in ("right", "down", "left", "up") for f in (False,
 DETOUR_FACTOR = 2.5   # a route longer than this times its direct length becomes a tag
 DETOUR_SLACK = 40     # ... plus this many grid steps
 TAG_GAP = 20          # distance from a terminal to its tag block
+GROUND_DROP = 40      # a Ground sits this far below the lowest terminal of its net
+
+# Drawing conventions: this terminal faces this side. Sources stand vertical with terminal 1
+# (+) on top; Ground has its terminal on top, so the symbol points down.
+STYLE = {kind: ("1", "top") for kind in (
+    "DCVoltageSource", "ACVoltageSource", "VoltageSource", "DCCurrentSource",
+    "ACCurrentSource", "CurrentSource", "Ground")}
 
 
 @dataclass
@@ -152,6 +162,56 @@ class Netlist:
             order_all.update(order)
             x += (max(cols) + 1) * dx + zone_gap
 
+    def _style(self):
+        """Apply STYLE: pick the first orientation (unflipped preferred) that puts the terminal on its side."""
+        for p in self.parts.values():
+            rule = STYLE.get(p.kind)
+            if p.oriented or not rule or not geometry.is_measured(p.kind):
+                continue
+            term, side = rule
+            for d, f in sorted(ORIENTATIONS, key=lambda o: o[1]):
+                t = geometry.shape(p.kind, (0, 0), d, f, p.params).terminals.get(term)
+                if t and side == "top" and t[0] == 0 and t[1] < 0:
+                    p.direction, p.flipped, p.oriented = d, f, True
+                    break
+
+    def _split_grounds(self):
+        """Give every grounded pin its own Ground symbol straight below it.
+
+        All PLECS Ground blocks are one node, so a ground net needs no wire across the sheet:
+        the net is replaced by one short pin-to-Ground net per pin. The netlist's own Ground
+        parts are reused first; extra ones are added as '<ground>_<part>_<terminal>'.
+        """
+        new_nets = []
+        for n in self.nets:
+            grounds = [a for a, _ in n.pins if self.parts[a].kind == "Ground"]
+            if n.kind != "Wire" or not grounds:
+                new_nets.append(n)
+                continue
+            pins = [(a, t) for a, t in n.pins if self.parts[a].kind != "Ground"]
+            pins.sort(key=lambda at: (-self._terminal(*at)[1], self._terminal(*at)[0]))
+            template = self.parts[grounds[0]]
+            for i, (a, t) in enumerate(pins):
+                if i < len(grounds):
+                    g = self.parts[grounds[i]]
+                else:
+                    g = self.part(f"{template.name}_{a}_{t}", "Ground", dict(template.params), zone=template.zone)
+                    g.direction, g.flipped, g.oriented = template.direction, template.flipped, template.oriented
+                self._drop_under(g, self._terminal(a, t))
+                new_nets.append(Net(f"{n.name}_{a}_{t}", "Wire", [(a, t), (g.name, 1)]))
+        self.nets = new_nets
+
+    def _drop_under(self, g, node):
+        """Place Ground g so that its terminal is GROUND_DROP below the node, on the same x."""
+        if g.fixed:
+            return
+        t = geometry.shape(g.kind, (0, 0), g.direction, g.flipped, g.params).terminals.get("1", (0, 0))
+        taken = {q.pos for q in self.parts.values() if q is not g}
+        pos = (snap(node[0] - t[0]), snap(node[1] + GROUND_DROP - t[1]))
+        while pos in taken:
+            pos = (pos[0], pos[1] + GROUND_DROP)
+        g.pos = pos
+
     def _orient(self):
         """Pick direction/flip for two-terminal parts so terminals face their neighbours."""
         where = {n: p.pos for n, p in self.parts.items()}
@@ -188,7 +248,9 @@ class Netlist:
     def layout(self, zones=None, x0=100, y0=100, dx=80, dy=70, zone_gap=60, grid=5):
         zones = zones or sorted({p.zone for p in self.parts.values()})
         self._place(zones, x0, y0, dx, dy, zone_gap)
+        self._style()
         self._orient()
+        self._split_grounds()
         sheet = Sheet(grid)
         router = Router(grid=grid)
         for p in self.parts.values():

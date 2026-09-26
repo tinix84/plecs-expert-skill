@@ -43,6 +43,17 @@ A connection without `Points` is left to PLECS routing, which ignores other bloc
 5. **Lint:** run `python scripts/lint_schematic.py model.plecs`. Fix every error. For every `crossing` or `unrouted` warning, reroute or replace the run with a tag. Run the linter again.
 6. **Simulate once in PLECS** (XML-RPC `plecs.load`, then `plecs.simulate`, then `plecs.close`). Loading alone does not catch missing wires. The simulation's topology check does, and it names overlapping, unconnected terminals.
 
+## Drawing conventions
+
+| Part | Draw it |
+|------|---------|
+| Voltage and current sources | Vertical, terminal 1 (+) on top: `Direction up`, `Flipped off` |
+| Ground | One Ground under each grounded pin, pointing down (terminal on top): `Direction up`, `Flipped off`. All Ground blocks are one node, so no ground wire crosses the sheet. |
+| C-Script | `Direction up` puts inputs on the left and outputs on the right. `Direction right` puts inputs on top. |
+| Passive parts | Terminal 1 is on top at `Direction up` and on the right at `Direction right`. |
+
+Terminal positions for every orientation are in `scripts/geometry.json`, measured from PLECS 4.9.
+
 ## Tag rules
 
 | Parameter | Rule |
