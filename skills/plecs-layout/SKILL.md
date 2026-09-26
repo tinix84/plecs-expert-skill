@@ -40,8 +40,9 @@ A connection without `Points` is left to PLECS routing, which ignores other bloc
 | Rail shared by many densely packed parts (DC+, DC-, neutral) | electrical `Label` at each part |
 3. **Build the model with `scripts/layout.py`** (`Sheet`, `Zone`, `goto`, `from_`, `label`, `wire`, `signal`, `model`). Or write the text by hand under the same rules. The module docstring shows a complete example.
 4. **Route every wire.** Give `Points` to every connection whose two ends are not on one horizontal or vertical line. Consecutive `Points`, including a branch's first point after its junction, share x or y. Keep wires at least 15 px away from blocks that are not their own ends.
-5. **Lint:** run `python scripts/lint_schematic.py model.plecs`. Fix every error. For every `crossing` or `unrouted` warning, reroute or replace the run with a tag. Run the linter again.
-6. **Simulate once in PLECS** (XML-RPC `plecs.load`, then `plecs.simulate`, then `plecs.close`). Loading alone does not catch missing wires. The simulation's topology check does, and it names overlapping, unconnected terminals.
+5. **Preview:** run `python scripts/preview.py model.plecs` and look at the SVG (convert it to PNG if your viewer needs one). Dashed red legs are corners PLECS draws by itself; check them.
+6. **Lint:** run `python scripts/lint_schematic.py model.plecs`. Fix every error. For every `crossing` or `unrouted` warning, reroute or replace the run with a tag. Run the linter again.
+7. **Simulate once in PLECS** (XML-RPC `plecs.load`, then `plecs.simulate`, then `plecs.close`). Loading alone does not catch missing wires. The simulation's topology check does, and it names overlapping, unconnected terminals.
 
 ## Drawing conventions
 

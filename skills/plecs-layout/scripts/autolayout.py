@@ -162,8 +162,34 @@ class Netlist:
             order_all.update(order)
             x += (max(cols) + 1) * dx + zone_gap
 
+    def _grounded_pins(self):
+        """(part, terminal) pins that sit on a net containing a Ground block."""
+        out = set()
+        for n in self.nets:
+            if any(self.parts[a].kind == "Ground" for a, _ in n.pins):
+                out |= {(a, str(t)) for a, t in n.pins if self.parts[a].kind != "Ground"}
+        return out
+
     def _style(self):
-        """Apply STYLE: pick the first orientation (unflipped preferred) that puts the terminal on its side."""
+        """Apply drawing conventions using the measured geometry.
+
+        STYLE parts (sources, Ground) get their listed terminal on top. A two-terminal part
+        from a node to ground (shunt capacitor, load, voltmeter) stands vertical with the
+        ground pin at the bottom.
+        """
+        grounded = self._grounded_pins()
+        for p in self.parts.values():
+            if p.oriented or not geometry.is_measured(p.kind) or p.kind in STYLE:
+                continue
+            elec = [t for t in ("1", "2") if (p.name, t) in grounded]
+            if len(elec) != 1:
+                continue
+            top = "2" if elec[0] == "1" else "1"
+            for d, f in sorted(ORIENTATIONS, key=lambda o: o[1]):
+                ts = geometry.shape(p.kind, (0, 0), d, f, p.params).terminals
+                if top in ts and elec[0] in ts and ts[top][0] == ts[elec[0]][0] and ts[top][1] < ts[elec[0]][1]:
+                    p.direction, p.flipped, p.oriented = d, f, True
+                    break
         for p in self.parts.values():
             rule = STYLE.get(p.kind)
             if p.oriented or not rule or not geometry.is_measured(p.kind):
@@ -281,26 +307,45 @@ class Netlist:
         return sheet, report
 
     def _tag(self, sheet, router, n, pins):
-        """Replace a net by tag blocks next to each terminal plus a short stub wire."""
+        """Replace a net by one tag per zone: pins of a zone are wired together as usual and
+        reach the other zones through a tag (Goto/From for signals, electrical Label for wires)."""
         tag = n.tag or n.name
-        for i, (part, term, tp) in enumerate(pins):
+        groups: dict = {}
+        for pin in pins:
+            groups.setdefault(self.parts[pin[0]].zone, []).append(pin)
+        for gi, group in enumerate(groups.values()):
+            driver = n.kind == "Signal" and pins[0] in group
+            anchor = group[0]
+            part, term, tp = anchor
             esc = router._escape(part, tp)
             (cx, cy), (ex, ey) = router._pt(esc[0]), router._pt(esc[-1])
             ux, uy = (ex > cx) - (ex < cx), (ey > cy) - (ey < cy)
             if (ux, uy) == (0, 0):
-                ux = -1 if (n.kind == "Signal" and i > 0) else 1
+                ux = 1 if (driver or n.kind == "Wire") else -1
             at = (snap(ex + ux * TAG_GAP), snap(ey + uy * TAG_GAP))
+            while any(b[0] - 12 < at[0] < b[2] + 12 and b[1] - 10 < at[1] < b[3] + 10
+                      for b in router.boxes.values()):
+                at = (at[0] + ux * 10, at[1] + uy * 10)
             name = f"{tag}_{part}_{term}"
             direction = {(1, 0): "right", (-1, 0): "left", (0, 1): "down", (0, -1): "up"}[(ux, uy)]
             if n.kind == "Wire":
-                sheet.label(name, tag, at, LOCAL, direction)
-                src, dst = (part, term), (name, 1)
-            elif i == 0:
-                sheet.goto(name, tag, at, LOCAL, direction)
-                src, dst = (part, term), (name, 1)
+                kind, tag_dir = "Label", direction
+                sheet.label(name, tag, at, LOCAL, tag_dir)
+            elif driver:
+                kind, tag_dir = "Goto", direction
+                sheet.goto(name, tag, at, LOCAL, tag_dir)
             else:
-                flip = {"right": "left", "left": "right", "down": "up", "up": "down"}[direction]
-                sheet.from_(name, tag, at, LOCAL, flip)
-                src, dst = (name, 1), (part, term)
-            router.add_obstacle(name, (at[0] - 10, at[1] - 8, at[0] + 10, at[1] + 8))
-            sheet.wire(src, dst) if n.kind == "Wire" else sheet.signal(src, dst)
+                kind = "From"
+                tag_dir = {"right": "left", "left": "right", "down": "up", "up": "down"}[direction]
+                sheet.from_(name, tag, at, LOCAL, tag_dir)
+            shp = geometry.shape(kind, at, tag_dir, False, {})
+            router.add_obstacle(name, shp.box if shp.measured else (at[0] - 10, at[1] - 8, at[0] + 10, at[1] + 8))
+            tag_pin = (name, 1, geometry.terminal(shp, 1, at))
+            # one routed tree per zone: the group's pins plus its tag; a From drives its group
+            ends = [tag_pin] + group if kind == "From" else group + [tag_pin]
+            route = router.route(ends)
+            if route.tree is not None:
+                sheet.connect_tree(n.kind, ends[0][:2], route.tree)
+            else:
+                for a, b in zip(ends, ends[1:]):
+                    (sheet.wire if n.kind == "Wire" else sheet.signal)(a[:2], b[:2])
