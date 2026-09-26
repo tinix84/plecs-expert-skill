@@ -83,18 +83,18 @@ def harvest(model_files):
             for c in comps.values():
                 templates.setdefault(c.get("Type"), c)
 
-            def note(conn, is_root):
-                wire = conn.get("Type") in ("Wire", "WireMux", "WireSelector")
+            def note(conn, is_root, wire):
+                # A Branch does not repeat its parent's Type, so the type is passed down.
                 src, dst = conn.get("SrcComponent"), conn.get("DstComponent")
                 if is_root and src in comps:
                     kinds[(comps[src].get("Type"), conn.get("SrcTerminal"))]["elec" if wire else "out"] += 1
                 if dst in comps:
                     kinds[(comps[dst].get("Type"), conn.get("DstTerminal"))]["elec" if wire else "in"] += 1
                 for br in conn.children_of("Branch"):
-                    note(br, False)
+                    note(br, False, wire)
 
             for conn in level.children_of("Connection"):
-                note(conn, True)
+                note(conn, True, conn.get("Type") in ("Wire", "WireMux", "WireSelector"))
     return templates, kinds
 
 
@@ -114,6 +114,8 @@ def instance(template, name, pos, direction, flipped, params):
                "Direction": direction, "Flipped": "on" if flipped else "off", "Open": '"0"'}
     replace.update({k[1:]: json.dumps(v) for k, v in params.items() if k.startswith("@")})
     blk.items = [((i[0], replace[i[0]]) if isinstance(i, tuple) and i[0] in replace else i) for i in blk.items]
+    if blk.get("Type") in ("Goto", "From", "Label"):
+        set_param(blk, "Tag", name)  # unique tags: no duplicate-Goto errors on the sheet
     for var, value in params.items():
         if not var.startswith("@") and not set_param(blk, var, value):
             print(f"warning: {template.get('Type')} has no parameter {var!r}; appended", file=sys.stderr)
@@ -140,6 +142,7 @@ def main(argv=None):
 
     sch = pf.Block("Schematic", [("Location", "[0, 26; 1600, 1000]"), ("ZoomFactor", "1")])
     index, skipped, n = [], [], 0
+    connections = []  # written after all components; PLECS rejects a Component after a Connection
     for row, (kind, variant, params) in enumerate(TYPES):
         if kind not in templates:
             skipped.append(kind)
@@ -157,7 +160,8 @@ def main(argv=None):
                 col += 1
         terms = sorted({int(t) for (tk, t) in kinds if tk == kind and t and t.isdigit()})
         for term in terms:
-            role = kinds[(kind, str(term))].most_common(1)[0][0]
+            seen = kinds[(kind, str(term))]
+            role = "elec" if seen["elec"] else seen.most_common(1)[0][0]
             name = f"k{n:04d}"
             n += 1
             pos = (100 + col * PITCH_X, y)
@@ -167,7 +171,7 @@ def main(argv=None):
             sch.items.append(instance(templates[partner_for[role]], partner, ppos, "right", False, {}))
             wire = "Wire" if role == "elec" else "Signal"
             src, st, dst, dt = (partner, 1, name, term) if role == "in" else (name, term, partner, 1)
-            sch.items.append(pf.Block("Connection", [
+            connections.append(pf.Block("Connection", [
                 ("Type", wire), ("SrcComponent", json.dumps(src)), ("SrcTerminal", str(st)),
                 ("DstComponent", json.dumps(dst)), ("DstTerminal", str(dt))]))
             index.append({"name": name, "type": kind, "variant": variant, "params": params,
@@ -180,17 +184,18 @@ def main(argv=None):
     max_x = max(c["position"][0] for c in index) + PITCH_X
     max_y = max(c["position"][1] for c in index) + PITCH_Y
     fiducials = []
-    for i, (fx, fy) in enumerate(((20, 20), (max_x, max_y))):
+    for i, (fx, fy) in enumerate(((-200, -200), (max_x, max_y))):  # both clear of the cell grid
         a, b = f"fidA{i}", f"fidB{i}"
         sch.items.append(instance(templates["Ground"], a, (fx - 40, fy + 80), "right", False, {}))
         sch.items.append(instance(templates["Ground"], b, (fx + 80, fy + 80), "right", False, {}))
         pts = [(fx, fy + 40), (fx, fy), (fx + FIDUCIAL, fy), (fx + FIDUCIAL, fy + 40)]
-        sch.items.append(pf.Block("Connection", [
+        connections.append(pf.Block("Connection", [
             ("Type", "Wire"), ("SrcComponent", json.dumps(a)), ("SrcTerminal", "1"),
             ("Points", "[" + "; ".join(f"{x}, {y}" for x, y in pts) + "]"),
             ("DstComponent", json.dumps(b)), ("DstTerminal", "1")]))
         fiducials.append({"corner": [fx, fy], "points": pts})
 
+    sch.items.extend(connections)
     model = pf.Block("Plecs", [("Name", '"plecs_geometry_calibration"'), ("Version", '"4.7"'),
                                ("CircuitModel", '"ContStateSpace"'), ("StartTime", '"0.0"'),
                                ("TimeSpan", '"1e-3"'), ("Solver", '"auto"')])

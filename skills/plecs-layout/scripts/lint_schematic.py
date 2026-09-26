@@ -142,6 +142,10 @@ def _cross(s, t) -> bool:
 def _lint_level(sch, path, grid, tags) -> list:
     out = []
     comps = {c.get("Name"): c for c in sch.children_of("Component")}
+    kinds = [b.kind for b in sch.children if b.kind in ("Component", "Connection")]
+    if "Connection" in kinds and "Component" in kinds[kinds.index("Connection"):]:
+        out.append(Finding("order", "error", path, "-",
+                           "a Component follows a Connection; PLECS reports a syntax error. Write all Components first"))
 
     for name, c in comps.items():
         p = c.position

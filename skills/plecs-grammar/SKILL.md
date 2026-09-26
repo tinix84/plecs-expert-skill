@@ -25,5 +25,7 @@ A `.plecs` file is not XML. It is nested `Key value` text with `Name { ... }` su
 
 - Quote every string value as PLECS does; keep numeric expressions as strings (`"2*pi*50"`).
 - Component `Name` values must be unique inside one schematic level.
+- Inside a `Schematic`, write every `Component` before the first `Connection`. A Component after a Connection is a syntax error in PLECS 4.9.
+- A `Branch` does not repeat its parent's `Type`; it inherits `Wire` or `Signal` from the connection it belongs to.
 - A connection without `Points` is drawn as a straight line between terminals. For a readable drawing, use the `plecs-layout` skill.
 - After generating a file, open it once in PLECS (GUI or XML-RPC `plecs.load`) to confirm it parses.

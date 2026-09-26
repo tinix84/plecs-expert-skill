@@ -113,3 +113,8 @@ def test_crossing_message_names_the_location():
                  conn("C", 2, "D", 1, points=[(200, 150), (200, 250)]))
     msg = [f.message for f in lint.lint_text(text) if f.code == "crossing"][0]
     assert "(200, 200)" in msg
+
+
+def test_component_after_connection_is_a_syntax_error():
+    text = model(comp("Gain", "A", (100, 100)), conn("A", 2, "B", 1), comp("Gain", "B", (200, 100)))
+    assert "order" in codes(text)
