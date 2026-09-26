@@ -130,6 +130,24 @@ class Sheet:
         """Signal line. Same arguments as wire()."""
         self._connection("Signal", src, dst if isinstance(dst, list) else [dst], via)
 
+    def connect_tree(self, kind: str, src, tree: dict):
+        """Write a routed net (router.Route.tree) as one connection with nested Branch blocks."""
+        sname, sterm = src
+
+        def body(node, pad):
+            out = []
+            if node["points"]:
+                out.append(pad + "Points        [" + "; ".join(f"{x}, {y}" for x, y in node["points"]) + "]")
+            if node["dst"]:
+                out += [pad + f"DstComponent  {json.dumps(node['dst'][0])}", pad + f"DstTerminal   {node['dst'][1]}"]
+            for b in node["branches"]:
+                out += [pad + "Branch {"] + body(b, pad + "  ") + [pad + "}"]
+            return out
+
+        lines = ["Connection {", f"  Type          {kind}", f"  SrcComponent  {json.dumps(sname)}",
+                 f"  SrcTerminal   {sterm}"] + body(tree, "  ") + ["}"]
+        self._conns.append("\n".join(lines))
+
     def schematic(self) -> str:
         body = "\n".join(self._comps + self._conns)
         inner = "\n".join("    " + line for line in body.splitlines())

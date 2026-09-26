@@ -94,3 +94,22 @@ def test_wire_through_foreign_component():
     text = model(comp("Gain", "A", (100, 100)), comp("Gain", "B", (300, 100)), comp("Gain", "C", (200, 100)),
                  conn("A", 2, "B", 1, points=[(150, 100), (250, 100)]))
     assert "wire-through-component" in codes(text)
+
+
+def test_wire_over_a_measured_terminal(monkeypatch):
+    import geometry
+    box = {"box": [-15, -10, 15, 10], "terminals": {"1": [-15, 0], "2": [15, 0]}}
+    monkeypatch.setattr(geometry, "_TABLE", {"Gain": {"": {"right/off": box}}})
+    # C sits below the wire; its terminal 1 at (185, 100) lies exactly on the wire.
+    text = model(comp("Gain", "A", (100, 100)), comp("Gain", "B", (300, 100)), comp("Gain", "C", (200, 100)),
+                 conn("A", 2, "B", 1))
+    assert "wire-over-terminal" in codes(text)
+
+
+def test_crossing_message_names_the_location():
+    text = model(comp("Gain", "A", (100, 200)), comp("Gain", "B", (300, 200)),
+                 comp("Gain", "C", (200, 100)), comp("Gain", "D", (200, 300)),
+                 conn("A", 2, "B", 1, points=[(150, 200), (250, 200)]),
+                 conn("C", 2, "D", 1, points=[(200, 150), (200, 250)]))
+    msg = [f.message for f in lint.lint_text(text) if f.code == "crossing"][0]
+    assert "(200, 200)" in msg

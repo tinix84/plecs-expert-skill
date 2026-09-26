@@ -20,6 +20,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import geometry  # noqa: E402
 import plecs_file as pf  # noqa: E402
 
 TAG_BLOCKS = {"Goto", "From", "Label"}
@@ -44,12 +45,25 @@ class Finding:
     message: str
 
 
+def _shape(c):
+    params = {p.get("Variable"): p.get("Value") for p in c.children_of("Parameter")}
+    if c.get("Axes"):
+        params["@Axes"] = c.get("Axes")
+    return geometry.shape(c.get("Type"), c.position, c.get("Direction") or "right",
+                          c.get("Flipped") == "on", params)
+
+
+def _terminal_point(comps, name, term):
+    c = comps[name]
+    return geometry.terminal(_shape(c), term, c.position)
+
+
 def _segments(conn, comps, start=None):
     """Yield ((a, a_owner), (b, b_owner)) segments of a connection tree.
 
-    An owner is the component whose terminal the end approximates (its centre),
-    or None for an explicit Point. A branch starts where its parent's Points end,
-    or at the parent's source terminal when the parent has no Points.
+    An owner is the component whose terminal the end is at, or None for an explicit
+    Point. Terminal ends use measured geometry, else the block centre. A branch starts
+    where its parent's Points end, or at the parent's source terminal.
     """
     src = conn.get("SrcComponent")
     pts = pf.points(conn)
@@ -57,11 +71,11 @@ def _segments(conn, comps, start=None):
     if start is not None:
         chain.append(start)
     elif src in comps and comps[src].position:
-        chain.append((comps[src].position, src))
+        chain.append((_terminal_point(comps, src, conn.get("SrcTerminal")), src))
     chain += [(p, None) for p in pts]
     dst = conn.get("DstComponent")
     if dst in comps and comps[dst].position:
-        chain.append((comps[dst].position, dst))
+        chain.append((_terminal_point(comps, dst, conn.get("DstTerminal")), dst))
     yield from zip(chain, chain[1:])
     tail = (pts[-1], None) if pts else (chain[0] if chain else None)
     for br in conn.children_of("Branch"):
@@ -89,6 +103,27 @@ def _seg_hits_box(a, b, c, half) -> bool:
     if x1 == x2:
         return abs(x1 - c[0]) < half and min(y1, y2) < c[1] < max(y1, y2)
     return False
+
+
+def _seg_hits_rect(a, b, r) -> bool:
+    """Axis-aligned segment a-b passes through the open rectangle r = (x0, y0, x1, y1)."""
+    (x1, y1), (x2, y2) = a, b
+    if y1 == y2:
+        return r[1] < y1 < r[3] and min(x1, x2) < r[2] and max(x1, x2) > r[0]
+    if x1 == x2:
+        return r[0] < x1 < r[2] and min(y1, y2) < r[3] and max(y1, y2) > r[1]
+    return False
+
+
+def _on_segment(a, b, p) -> bool:
+    (x1, y1), (x2, y2) = a, b
+    return ((y1 == y2 == p[1] and min(x1, x2) <= p[0] <= max(x1, x2))
+            or (x1 == x2 == p[0] and min(y1, y2) <= p[1] <= max(y1, y2)))
+
+
+def _crossing_point(s, t):
+    h, v = (s, t) if s[0][1] == s[1][1] else (t, s)
+    return (v[0][0], h[0][1])
 
 
 def _cross(s, t) -> bool:
@@ -130,6 +165,7 @@ def _lint_level(sch, path, grid, tags) -> list:
             if abs(pa[0] - pb[0]) < lim and abs(pa[1] - pb[1]) < lim:
                 out.append(Finding("overlap", "error", path, f"{a} / {b}", f"components {a} and {b} overlap"))
 
+    shapes = {n: _shape(c) for n, c in comps.items() if c.position}
     segs = []
     for k, conn in enumerate(sch.children_of("Connection")):
         label = f"connection {k} ({conn.get('SrcComponent')}:{conn.get('SrcTerminal')})"
@@ -154,15 +190,27 @@ def _lint_level(sch, path, grid, tags) -> list:
                 continue
             segs.append(((a, b), k))
             for n, c in comps.items():
-                half = SMALL_BODY_HALF if c.get("Type") in SMALL else BODY_HALF
-                if (n not in mine and c.position and c.get("Type") not in CONTAINERS
-                        and _seg_hits_box(a, b, c.position, half)):
+                if n in mine or not c.position or c.get("Type") in CONTAINERS:
+                    continue
+                shp = shapes[n]
+                if shp.measured:
+                    hit = _seg_hits_rect(a, b, shp.box)
+                    on_term = [t for t, tp in shp.terminals.items() if _on_segment(a, b, tp)]
+                    if on_term:
+                        out.append(Finding("wire-over-terminal", "error", path, label,
+                                           f"wire passes over terminal {on_term[0]} of {n}; PLECS joins them"))
+                else:
+                    half = SMALL_BODY_HALF if c.get("Type") in SMALL else BODY_HALF
+                    hit = _seg_hits_box(a, b, c.position, half)
+                if hit:
                     out.append(Finding("wire-through-component", "error", path, label,
                                        f"wire runs through {n}; dragging {n} can join it to this net"))
-    crossings = sum(1 for i, (s, ks) in enumerate(segs) for t, kt in segs[i + 1:] if ks != kt and _cross(s, t))
-    if crossings:
+    where = [_crossing_point(s_, t) for i, (s_, ks) in enumerate(segs) for t, kt in segs[i + 1:]
+             if ks != kt and _cross(s_, t)]
+    if where:
+        shown = ", ".join(f"({x:g}, {y:g})" for x, y in where[:5]) + (" ..." if len(where) > 5 else "")
         out.append(Finding("crossing", "warn", path, "-",
-                           f"{crossings} wire crossing(s); reroute or replace the long run with Goto/From or Label tags"))
+                           f"{len(where)} wire crossing(s) at {shown}; reroute or use Goto/From or Label tags"))
     return out
 
 
