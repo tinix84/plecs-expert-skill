@@ -21,11 +21,12 @@ import json
 import sys
 from pathlib import Path
 
-SKILL_ROOT = Path(__file__).resolve().parent.parent
-MANIFEST_PATH = SKILL_ROOT / "manifest.json"
+MAINTAINER_DIR = Path(__file__).resolve().parent
+REPO_ROOT = MAINTAINER_DIR.parent
+MANIFEST_PATH = MAINTAINER_DIR / "manifest.json"
 
 # Reuse extraction logic from sync_tables to keep hashes consistent
-sys.path.insert(0, str(SKILL_ROOT / "tools"))
+sys.path.insert(0, str(MAINTAINER_DIR))
 from sync_tables import extract_tables, fetch  # noqa: E402
 
 

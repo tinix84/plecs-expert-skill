@@ -1,47 +1,44 @@
 ---
 name: plecs-expert
-description: PLECS authoring help, .plecs schematic format, XML-RPC API, and SPICE-mapping reference. Use when answering "how do I X in PLECS", working on the netlist converter, or extending the PlecsServer XML-RPC wrapper.
-allowed-tools: Read, Grep, Glob, WebFetch, Bash
+description: Use when a task involves PLECS (Plexim) power-electronics simulation in any way — reading, generating, editing, laying out, scripting, or testing .plecs models, PLECS C-Script blocks, the PLECS XML-RPC interface, solver settings, or PLECS Coder — and it is not yet clear which PLECS skill applies.
+license: MIT (skill text). Plexim documentation facts are cited, see LICENSE-NOTES.md in the repository.
+metadata:
+  author: tinix84
+  repository: https://github.com/tinix84/plecs-expert-skill
+  plecs-version: "4.7-4.9"
 ---
 
 # PLECS Expert
 
-Lookup-first PLECS reference grounded in docs.plexim.com. Two layers:
-
-- **Layer A — offline docs**: `references/`. Verbatim factual tables + caveman prose.
-- **Layer B — pyplecs code**: `pyplecs.plecs_components`, `pyplecs.pyplecs.PlecsServer`. Live introspection.
+Entry point for the PLECS skill family. Pick the sibling skill for the task, then follow it.
 
 ## Routing
 
-| Topic | File |
-|-------|------|
-| Electrical passives (R, L, C, transformer) | `references/components/electrical-passive.md` |
-| Sources (V, I, signal) | `references/components/electrical-sources.md` |
-| Switches (MOSFET, IGBT, diode) | `references/components/electrical-switches.md` |
-| Meters & scopes | `references/components/electrical-meters.md` |
-| Magnetic blocks | `references/components/magnetic.md` |
-| Thermal blocks | `references/components/thermal.md` |
-| Control library | `references/components/control.md` |
-| Subsystems & masks | `references/components/system.md` |
-| XML-RPC API | `references/rpc-api.md` |
-| `.plecs` XML grammar | `references/plecs-xml-grammar.md` |
-| Solver | `references/solver.md` |
-| Codegen (PLECS Coder) | `references/codegen.md` |
+| Task | Skill |
+|------|-------|
+| Read or write `.plecs` file text: blocks, keys, `Component`, `Connection`, `Points`, `Branch` | `plecs-grammar` |
+| Component parameters, terminals, probes (R, L, C, sources, switches, meters, control, thermal, magnetic, subsystems) | `plecs-components` |
+| Generate or tidy a schematic so it is readable: placement, Goto/From tags, electrical labels, wire routing, lint | `plecs-layout` |
+| Solver settings and tolerances | `references/solver.md` |
 | C-Script block | `references/cscript.md` |
-| Long-tail topics | `references/url-index.md` (then WebFetch the listed URL) |
+| XML-RPC scripting (`plecs.simulate`, `plecs.set`, `plecs.get`) | `references/rpc-api.md` |
+| PLECS Coder / code generation | `references/codegen.md` |
+| Anything else | `references/url-index.md`, then fetch the listed docs.plexim.com page |
 
-## Composition rule
+If a sibling skill is not installed, its reference files are in the same repository under `skills/<name>/references/`.
 
-For component or RPC questions, check Layer B first. If a `*PlecsMdl` class exists in `pyplecs.plecs_components`, cite the wrapper. If a method exists on `PlecsServer`, cite it. Else cite Layer A. Else WebFetch from `references/url-index.md`.
+## Python tooling (optional)
+
+When the `pyplecs` package is installed, prefer its wrappers: `pyplecs.plecs_components` for component classes and `pyplecs.pyplecs.PlecsServer` for XML-RPC. Otherwise use the reference files.
 
 ## Citation rule
 
-Every answer cites a `references/*` path or a `docs.plexim.com` URL. No ungrounded claims.
+Every factual answer cites a reference file path or a docs.plexim.com URL. No ungrounded claims about PLECS behaviour.
 
 ## Style
 
-Generated prose follows `style/caveman.md`: fragments OK, drop articles/hedging/filler, pattern `[thing] [action] [reason]. [next step].`.
+Generated prose follows `style/caveman.md`: fragments are fine, no filler.
 
-## Boundary
+## Out of scope
 
-This skill does not cover: PLECS RT Box (separate future skill), license/purchasing, third-party libraries.
+PLECS RT Box, licensing and purchasing, third-party libraries.
