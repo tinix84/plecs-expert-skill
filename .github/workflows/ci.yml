@@ -1,0 +1,23 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install pytest skills-ref
+      - name: Validate skills against the Agent Skills spec
+        shell: bash
+        run: for d in skills/*/; do agentskills validate "$d"; done
+      - name: Tests (PLECS integration tests skip without a running PLECS)
+        run: pytest -q
