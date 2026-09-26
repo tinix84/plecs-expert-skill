@@ -118,3 +118,13 @@ def test_crossing_message_names_the_location():
 def test_component_after_connection_is_a_syntax_error():
     text = model(comp("Gain", "A", (100, 100)), conn("A", 2, "B", 1), comp("Gain", "B", (200, 100)))
     assert "order" in codes(text)
+
+
+def test_wire_through_its_own_block(monkeypatch):
+    import geometry
+    r = {"box": [-20, -5, 25, 5], "terminals": {"1": [20, 0], "2": [-20, 0]}}
+    monkeypatch.setattr(geometry, "_TABLE", {"Resistor": {"": {"right/off": r}}})
+    # the wire reaches R's terminal 1 (right side) from the left, across R's body and terminal 2
+    text = model(comp("Gain", "A", (60, 100)), comp("Resistor", "R", (180, 100)),
+                 conn("A", 2, "R", 1, points=[(100, 100)], kind="Wire"))
+    assert "wire-through-own-block" in codes(text)

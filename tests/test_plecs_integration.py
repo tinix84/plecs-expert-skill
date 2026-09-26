@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills/plecs-layout/scripts"))
+from autolayout import Netlist  # noqa: E402
 from layout import GLOBAL, LOCAL, Sheet, Zone  # noqa: E402
 
 URL = "http://localhost:1080/RPC2"
@@ -69,7 +70,6 @@ def _simulate(rpc, sh, name, tmp_path):
 def test_label_and_tags_carry_the_signal(tmp_path):
     rpc = _rpc()
     sh = rc_with_tags()
-    assert [f for f in sh.lint() if f.severity == "error"] == []
     result = _simulate(rpc, sh, "it_tags_local", tmp_path)
     # RC time constant 1 ms, so after 50 ms Vc = 10 V and the gain output is 1.0.
     assert result["Values"][0][-1] == pytest.approx(1.0, abs=1e-6)
@@ -78,4 +78,33 @@ def test_label_and_tags_carry_the_signal(tmp_path):
 def test_global_tags_work_too(tmp_path):
     rpc = _rpc()
     result = _simulate(rpc, rc_with_tags(GLOBAL, GLOBAL), "it_tags_global", tmp_path)
+    assert result["Values"][0][-1] == pytest.approx(1.0, abs=1e-6)
+
+
+def rc_netlist():
+    """The same RC circuit as a netlist: the placer and router draw it."""
+    nl = Netlist()
+    nl.part("Vin", "DCVoltageSource", {"V": "10"}, zone="source")
+    nl.part("R1", "Resistor", {"R": "1"}, zone="power")
+    nl.part("C1", "Capacitor", {"C": "1e-3", "v_init": "0"}, zone="power")
+    nl.part("Gnd", "Ground", zone="power")
+    nl.part("Vm", "Voltmeter", zone="measure")
+    nl.part("Gnd2", "Ground", zone="measure")
+    nl.part("K", "Gain", {"K": "0.1"}, zone="control")
+    nl.part("Out", "Output", {"Index": "1", "Width": "-1"}, zone="output")
+    nl.net("in", "Wire", [("Vin", 1), ("R1", 1)])
+    nl.net("vc", "Wire", [("R1", 2), ("C1", 1), ("Vm", 1)], tag="vc")      # electrical Label pair
+    nl.net("gnd", "Wire", [("Vin", 2), ("C1", 2), ("Gnd", 1)])
+    nl.net("gnd2", "Wire", [("Vm", 2), ("Gnd2", 1)])
+    nl.net("Vc", "Signal", [("Vm", 3), ("K", 1)], tag="Vc")                 # Goto/From pair
+    nl.net("y", "Signal", [("K", 2), ("Out", 1)])
+    return nl
+
+
+def test_autolayout_draws_a_clean_model_that_simulates(tmp_path):
+    rpc = _rpc()
+    sheet, report = rc_netlist().layout(zones=["source", "power", "measure", "control", "output"])
+    errors = [f for f in sheet.lint() if f.severity == "error"]
+    assert errors == [], errors
+    result = _simulate(rpc, sheet, "it_autolayout", tmp_path)
     assert result["Values"][0][-1] == pytest.approx(1.0, abs=1e-6)

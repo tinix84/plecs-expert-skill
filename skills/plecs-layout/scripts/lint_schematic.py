@@ -193,6 +193,17 @@ def _lint_level(sch, path, grid, tags) -> list:
                                        f"no Points between {oa} and {ob}; PLECS routes it without avoiding other blocks"))
                 continue
             segs.append(((a, b), k))
+            for n in mine:
+                c = comps.get(n)
+                if c is None or not c.position or c.get("Type") in CONTAINERS:
+                    continue
+                # A wire may end at a terminal of its own block but must not cross that block:
+                # through its centre, or over one of its other terminals.
+                others = [tp for tp in shapes[n].terminals.values() if tuple(tp) not in (a, b)]
+                centre = c.position not in (a, b) and _on_segment(a, b, c.position)
+                if centre or any(_on_segment(a, b, tp) for tp in others):
+                    out.append(Finding("wire-through-own-block", "error", path, label,
+                                       f"wire crosses its own block {n}; route it around to the terminal"))
             for n, c in comps.items():
                 if n in mine or not c.position or c.get("Type") in CONTAINERS:
                     continue

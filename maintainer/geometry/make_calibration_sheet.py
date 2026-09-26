@@ -50,7 +50,7 @@ TYPES = [
     ("RelationalOperator", "", {}), ("ConstantRelationalOperator", "", {}), ("LogicalOperator", "", {}),
     ("SignalSwitch", "", {}), ("MinMax", "", {}), ("Relay", "", {}), ("Display", "", {}),
     # Round Sum icons (IconShape 2) take at most 3 positions, spacer "|" included.
-    ("Sum", "2in_round", {"IconShape": "2", "Inputs": "|+-"}), ("Sum", "3in_round", {"IconShape": "2", "Inputs": "++-"}),
+    ("Sum", "round_|++", {"IconShape": "2", "Inputs": "|+-"}), ("Sum", "round_+++", {"IconShape": "2", "Inputs": "++-"}),
     ("Sum", "2in", {"IconShape": "1", "Inputs": "+-"}), ("Sum", "3in", {"IconShape": "1", "Inputs": "++-"}),
     ("Sum", "4in", {"IconShape": "1", "Inputs": "+++-"}),
     ("Product", "2in", {"Inputs": "2"}), ("Product", "3in", {"Inputs": "3"}),
