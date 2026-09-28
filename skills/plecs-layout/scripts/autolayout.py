@@ -57,6 +57,8 @@ class Part:
     pos: tuple = (0, 0)
     fixed: bool = False          # position given by the caller
     oriented: bool = False       # direction/flip given by the caller
+    row: int | None = None       # grid hint inside the zone
+    col: int | None = None
 
 
 @dataclass
@@ -72,8 +74,10 @@ class Netlist:
     parts: dict = field(default_factory=dict)
     nets: list = field(default_factory=list)
 
-    def part(self, name, kind, params=None, zone="main", direction=None, flipped=None, at=None):
-        p = Part(name, kind, dict(params or {}), zone)
+    def part(self, name, kind, params=None, zone="main", direction=None, flipped=None, at=None,
+             row=None, col=None):
+        """Add a part. row/col place it on its zone's grid (col 0 is the zone's left edge)."""
+        p = Part(name, kind, dict(params or {}), zone, row=row, col=col)
         if direction:
             p.direction, p.oriented = direction, True
         if flipped is not None:
@@ -132,35 +136,94 @@ class Netlist:
                         frontier = [rest[0]]
         return layer
 
+    def _chains(self):
+        """Series chains: two-terminal parts joined end to end by two-pin wire nets.
+
+        Each chain becomes one row, and keeps that row across zones, so for example the
+        three phases V -> R -> L -> Am line up as three rows.
+        """
+        def elec_pins(name):
+            return {str(t) for n in self.nets if n.kind == "Wire" for a, t in n.pins if a == name}
+
+        two_term = {n for n, p in self.parts.items() if p.kind != "Ground" and len(elec_pins(n)) == 2}
+        link = defaultdict(set)
+        for n in self.nets:
+            if n.kind == "Wire" and len(n.pins) == 2:
+                (a, _), (b, _) = n.pins
+                if a in two_term and b in two_term:
+                    link[a].add(b)
+                    link[b].add(a)
+        chains, seen = [], set()
+        for start in sorted(two_term, key=lambda m: list(self.parts).index(m)):
+            if start in seen or len(link[start]) > 1 or not link[start]:
+                continue
+            chain, prev, cur = [start], None, start
+            seen.add(start)
+            while True:
+                nxt = [m for m in link[cur] if m != prev and m not in seen]
+                if not nxt:
+                    break
+                prev, cur = cur, nxt[0]
+                chain.append(cur)
+                seen.add(cur)
+            if len(chain) > 1:
+                chains.append(chain)
+        return chains
+
     def _place(self, zones, x0, y0, dx, dy, zone_gap):
         nb = self._neighbours()
+        # series chains give rows (and column order) to parts without hints
+        auto_row, auto_col = {}, {}
+        for r, chain in enumerate(self._chains()):
+            col_in_zone = defaultdict(int)
+            for m in chain:
+                p = self.parts[m]
+                if p.row is None and p.col is None:
+                    auto_row[m] = r
+                    auto_col[m] = col_in_zone[p.zone]
+                    col_in_zone[p.zone] += 1
         x = x0
-        order_all = {}
         for z in zones:
             members = [n for n, p in self.parts.items() if p.zone == z]
             if not members:
                 continue
-            layer = self._layers(members)
-            cols = defaultdict(list)
+            grid = {}
             for m in members:
-                cols[layer[m]].append(m)
-            # barycentre sweeps to reduce crossings
-            order = {m: i for i, m in enumerate(members)}
-            for _ in range(4):
+                p = self.parts[m]
+                if p.row is not None or p.col is not None:
+                    grid[m] = (p.col or 0, p.row or 0)
+                elif m in auto_row:
+                    grid[m] = (auto_col[m], auto_row[m])
+            rest = [m for m in members if m not in grid]
+            used = set(grid.values())
+            if rest:
+                layer = self._layers(rest)
+                cols = defaultdict(list)
+                for m in rest:
+                    cols[layer[m]].append(m)
+                order = {m: i for i, m in enumerate(rest)}
+                for _ in range(4):  # barycentre sweeps to reduce crossings
+                    for c in sorted(cols):
+                        def bary(m):
+                            ys = [order[o] for o in nb[m] if o in order and o not in cols[c]]
+                            return sum(ys) / len(ys) if ys else order[m]
+                        cols[c].sort(key=bary)
+                        for i, m in enumerate(cols[c]):
+                            order[m] = i
+                base = max((c for c, _ in used), default=-1) + 1 if used else 0
                 for c in sorted(cols):
-                    def bary(m):
-                        ys = [order[o] for o in nb[m] if o in order and o not in cols[c]]
-                        return sum(ys) / len(ys) if ys else order[m]
-                    cols[c].sort(key=bary)
-                    for i, m in enumerate(cols[c]):
-                        order[m] = i
-            for c in sorted(cols):
-                for i, m in enumerate(cols[c]):
-                    p = self.parts[m]
-                    if not p.fixed:
-                        p.pos = (snap(x + c * dx), snap(y0 + i * dy))
-            order_all.update(order)
-            x += (max(cols) + 1) * dx + zone_gap
+                    row = 0
+                    for m in cols[c]:
+                        while (base + c, row) in used:
+                            row += 1
+                        grid[m] = (base + c, row)
+                        used.add((base + c, row))
+                        row += 1
+            for m, (c, r) in grid.items():
+                p = self.parts[m]
+                if not p.fixed:
+                    p.pos = (snap(x + c * dx), snap(y0 + r * dy))
+            x += (max(c for c, _ in grid.values()) + 1) * dx + zone_gap
 
     def _grounded_pins(self):
         """(part, terminal) pins that sit on a net containing a Ground block."""
@@ -273,6 +336,8 @@ class Netlist:
 
     def layout(self, zones=None, x0=100, y0=100, dx=80, dy=70, zone_gap=60, grid=5):
         zones = zones or sorted({p.zone for p in self.parts.values()})
+        original = Netlist(dict(self.parts), list(self.nets))
+        self.report_unrouted = []
         self._place(zones, x0, y0, dx, dy, zone_gap)
         self._style()
         self._orient()
@@ -297,14 +362,33 @@ class Netlist:
             trial = router.route(pins, commit=False) if not n.tag else None
             ok = (trial is not None and trial.tree is not None and trial.crossings == 0
                   and trial.length <= DETOUR_FACTOR * direct + DETOUR_SLACK)
+            one_zone = len({self.parts[a].zone for a, _ in n.pins}) == 1
             if ok:
                 route = router.route(pins)
                 sheet.connect_tree(n.kind, n.pins[0], route.tree)
                 report["routed"].append(n.name)
+            elif one_zone and not n.tag:
+                # a tag cannot help inside one zone: keep the best route, crossing or not
+                route = router.route(pins)
+                if route.tree is not None:
+                    sheet.connect_tree(n.kind, n.pins[0], route.tree)
+                    report["routed"].append(n.name)
+                else:
+                    self._unrouted(sheet, n.kind, pins)
             else:
                 self._tag(sheet, router, n, pins)
                 report["tagged"].append(n.name)
+        original.parts = self.parts   # ground splitting added Ground parts
+        report["connectivity"] = check_connectivity(sheet.model("check"), original)
+        report["unrouted"] = self.report_unrouted
         return sheet, report
+
+    def _unrouted(self, sheet, kind, ends):
+        """Last resort: one connection with a branch per pin (PLECS takes one connection per
+        terminal). Reported, because PLECS draws it without avoiding other blocks."""
+        self.report_unrouted.append([e[0] for e in ends])
+        tree = {"points": [], "dst": None, "branches": [{"points": [], "dst": e[:2], "branches": []} for e in ends[1:]]}
+        sheet.connect_tree(kind, ends[0][:2], tree)
 
     def _tag(self, sheet, router, n, pins):
         """Replace a net by one tag per zone: pins of a zone are wired together as usual and
@@ -347,5 +431,74 @@ class Netlist:
             if route.tree is not None:
                 sheet.connect_tree(n.kind, ends[0][:2], route.tree)
             else:
-                for a, b in zip(ends, ends[1:]):
-                    (sheet.wire if n.kind == "Wire" else sheet.signal)(a[:2], b[:2])
+                self._unrouted(sheet, n.kind, ends)
+
+
+def check_connectivity(text: str, nl: "Netlist") -> list[str]:
+    """Rebuild the nets from a written model and compare them with the netlist.
+
+    Wires and signals join their endpoints; electrical Labels with one tag, a Goto with its
+    Froms, and all Ground blocks are joined too. Returns a list of differences (empty = same).
+    """
+    import plecs_file as pf
+
+    parent: dict = {}
+
+    def find(x):
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        parent[find(a)] = find(b)
+
+    sch = pf.schematic(pf.parse(text))
+    comps = {c.get("Name"): c for c in sch.children_of("Component")}
+
+    def ends(conn, out):
+        if conn.get("SrcComponent"):
+            out.append((conn.get("SrcComponent"), str(conn.get("SrcTerminal"))))
+        if conn.get("DstComponent"):
+            out.append((conn.get("DstComponent"), str(conn.get("DstTerminal"))))
+        for b in conn.children_of("Branch"):
+            ends(b, out)
+        return out
+
+    problems = []
+    claimed: dict = {}
+    for k, conn in enumerate(sch.children_of("Connection")):
+        pts = ends(conn, [])
+        # PLECS takes one connection per terminal and ignores the others
+        taken = [p for p in pts if claimed.get(p, k) != k]
+        for p in taken:
+            problems.append(f"terminal {p[0]}:{p[1]} has more than one connection; PLECS ignores the extra one")
+        pts = [p for p in pts if p not in taken]
+        for p in pts:
+            claimed.setdefault(p, k)
+        for a in pts[1:]:
+            union(pts[0], a)
+    groups = defaultdict(list)
+    for name, c in comps.items():
+        kind = c.get("Type")
+        if kind in ("Label", "Goto", "From"):
+            groups[("tag", "Label" if kind == "Label" else "signal", c.param("Tag"))].append((name, "1"))
+        elif kind == "Ground":
+            groups[("ground",)].append((name, "1"))
+    for members in groups.values():
+        for m in members[1:]:
+            union(members[0], m)
+
+    roots = {}
+    for n in nl.nets:
+        pins = [(a, str(t)) for a, t in n.pins]
+        rs = {find(p) for p in pins}
+        if len(rs) > 1:
+            problems.append(f"net {n.name} is split into {len(rs)} parts")
+        roots.setdefault(find(pins[0]), []).append(n)
+    for r, nets in roots.items():
+        grounded = [n for n in nets if any(nl.parts[a].kind == "Ground" for a, _ in n.pins)]
+        if len(nets) > 1 and len(grounded) < len(nets):
+            problems.append("nets " + ", ".join(n.name for n in nets) + " are joined")
+    return problems

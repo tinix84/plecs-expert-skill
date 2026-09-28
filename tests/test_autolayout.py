@@ -113,3 +113,29 @@ def test_sources_are_vertical_and_ground_points_down_under_its_node():
                  for p, t in ((vin, "2"), (nl.parts["R1"], "2")))
     assert gnd.pos[1] > lowest                                    # below the node it grounds
     assert [f for f in sheet.lint() if f.severity == "error"] == []
+
+
+def test_connectivity_check_finds_a_missing_wire():
+    nl = autolayout.Netlist()
+    nl.part("A", "Gain", zone="z")
+    nl.part("B", "Gain", zone="z")
+    nl.net("n", "Signal", [("A", 2), ("B", 1)])
+    sheet, report = nl.layout(zones=["z"])
+    assert report["connectivity"] == []
+    broken = sheet.model("t").replace('DstComponent  "B"', 'DstComponent  "A"')
+    assert autolayout.check_connectivity(broken, nl)
+
+
+def test_connectivity_check_ignores_second_connection_on_a_terminal():
+    nl = autolayout.Netlist()
+    for n in ("A", "B", "C"):
+        nl.part(n, "Gain", zone="z")
+    nl.net("n", "Signal", [("A", 2), ("B", 1), ("C", 1)])
+    sheet, _ = nl.layout(zones=["z"])
+    two = sheet.model("t")
+    import re
+    # rewrite as two separate connections on A:2, which PLECS does not accept
+    body = ('Connection {\n Type Signal\n SrcComponent "A"\n SrcTerminal 2\n DstComponent "B"\n DstTerminal 1\n}\n'
+            'Connection {\n Type Signal\n SrcComponent "A"\n SrcTerminal 2\n DstComponent "C"\n DstTerminal 1\n}\n')
+    two = re.sub(r"    Connection \{.*?\n    \}\n", "", two, flags=re.S).replace("  }\n}\n", body + "  }\n}\n")
+    assert autolayout.check_connectivity(two, nl)

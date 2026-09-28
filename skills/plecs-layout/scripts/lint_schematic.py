@@ -82,6 +82,17 @@ def _segments(conn, comps, start=None):
         yield from _segments(br, comps, start=tail)
 
 
+def _terminal_ends(conn, root=True):
+    out = []
+    if root and conn.get("SrcComponent"):
+        out.append((conn.get("SrcComponent"), str(conn.get("SrcTerminal"))))
+    if conn.get("DstComponent"):
+        out.append((conn.get("DstComponent"), str(conn.get("DstTerminal"))))
+    for br in conn.children_of("Branch"):
+        out += _terminal_ends(br, False)
+    return out
+
+
 def _endpoints(conn) -> set:
     names = {conn.get("SrcComponent"), conn.get("DstComponent")}
     for br in conn.children_of("Branch"):
@@ -170,6 +181,15 @@ def _lint_level(sch, path, grid, tags) -> list:
                 out.append(Finding("overlap", "error", path, f"{a} / {b}", f"components {a} and {b} overlap"))
 
     shapes = {n: _shape(c) for n, c in comps.items() if c.position}
+    # PLECS uses one connection per terminal; further wires must branch from that connection
+    seen_terms: dict = {}
+    for k, conn in enumerate(sch.children_of("Connection")):
+        for term in _terminal_ends(conn):
+            if term in seen_terms and seen_terms[term] != k:
+                out.append(Finding("terminal-multiple-connections", "error", path, f"{term[0]}:{term[1]}",
+                                   f"terminal {term[1]} of {term[0]} has more than one connection; PLECS ignores "
+                                   "all but one. Make the other wires Branches of that connection"))
+            seen_terms.setdefault(term, k)
     segs = []
     for k, conn in enumerate(sch.children_of("Connection")):
         label = f"connection {k} ({conn.get('SrcComponent')}:{conn.get('SrcTerminal')})"

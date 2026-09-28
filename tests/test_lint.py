@@ -128,3 +128,10 @@ def test_wire_through_its_own_block(monkeypatch):
     text = model(comp("Gain", "A", (60, 100)), comp("Resistor", "R", (180, 100)),
                  conn("A", 2, "R", 1, points=[(100, 100)], kind="Wire"))
     assert "wire-through-own-block" in codes(text)
+
+
+def test_two_connections_on_one_terminal():
+    # PLECS uses one connection per terminal; a second one is ignored
+    text = model(comp("Gain", "A", (100, 100)), comp("Gain", "B", (300, 100)), comp("Gain", "C", (300, 200)),
+                 conn("A", 2, "B", 1), conn("A", 2, "C", 1, points=[(200, 100), (200, 200)]))
+    assert "terminal-multiple-connections" in codes(text)
