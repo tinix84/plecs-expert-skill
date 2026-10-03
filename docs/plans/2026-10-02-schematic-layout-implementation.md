@@ -248,9 +248,10 @@ The first implementation slice is L01. Success for the controller milestone requ
 
 ## Closure plan for the remaining gates
 
-The current execution record leaves L05 and L13 open. Close them in this order; L09-L12 must
-then be rechecked because they depend on L05. Do not mark the controller milestone complete until
-the evidence and acceptance checks below are recorded.
+The Subsystem adapter is implemented for its verified record form, but independent displayed-
+coordinate evidence for L05 and the native visual acceptance evidence for L13 remain open. Close
+them in this order; L09-L12 must then be rechecked because they depend on L05. Do not mark the
+controller milestone complete until the evidence and acceptance checks below are recorded.
 
 ### C1 — Close L05 with measured Subsystem geometry
 
@@ -345,12 +346,12 @@ after approval. Power-stage work remains outside this plan.
 | Tasks | Status | Evidence / remaining work |
 |---|---|---|
 | L01-L04 | Implemented | Calibrated C-Script variants, truthful coverage, electrical regression protection, rectangle/terminal-leg checks, and scalar-width/vector-port parsing. Uncalibrated counts and expressions remain unsupported. |
-| L05 | Implemented for the verified record form | `component_shape` reads an explicit Subsystem `Frame` and ordered `Terminal Position` records for `Direction up`, `Flipped off`; lint, preview, controller placement/scoring and round-trip tests cover it. Other transforms and incomplete records remain unsupported. PLECS 4.9.8 independently reported the fixture frame and numbered terminal positions listed below. |
+| L05 | Adapter implemented for the verified record form; independent GUI measurement pending | `component_shape` reads an explicit Subsystem `Frame` and ordered `Terminal Position` records for `Direction up`, `Flipped off`; lint, preview, controller placement/scoring and round-trip tests cover it. PLECS 4.9.8 model-tree values are recorded below, but the required screen-coordinate measurement against the displayed frame and ports is not yet retained. Other transforms and incomplete records remain unsupported. |
 | L06-L08 | Implemented | Connectivity difference checking, same-zone forced signal tags, text envelopes and preview reservations have regression coverage. |
 | L09-L11 | Implemented; dependent regressions rechecked | Deterministic controller placement, straight-wire/tag emission, report scoring and strict `accepted` status are integrated, including the verified Subsystem template form. Placement geometry uses the resolved controller orientation before reserving space; a right-oriented C-Script template regression verifies normalization to up. A connected four-port C-Script and unequal-size Subsystem chain pass layout checks. If forced local tags on adjacent multiport terminals overlap, layout raises `LayoutError` with `tag_spacing_conflict`; it does not return a colliding sheet. |
 | L12 | Implemented with stated limits | Nested sheet paths and local/global tag scopes are checked. Masked/code-generation visibility and automatic subsystem boundary traversal remain unsupported. |
 | L13 | Partial | The single-channel synthetic controller and connected two-channel C-Script controller were loaded and simulated in PLECS Standalone 4.9.8; final outputs were `1.0` and `[1.0, 2.0]`, respectively, within `1e-6` absolute tolerance. Sprint 2 also retained PLECS simulations for feedback and unequal-size Subsystem models. Their native GUI captures and screen-scale text comparisons remain outstanding, so visual acceptance is open. |
-| L14 | Documentation complete; visual gate pending | README, skill usage, conventions and controller spec were updated. The API and CLI examples rerun on 2026-10-03 both returned accepted/quality 0. The latest full suite passed (126 tests); all four skill validations and `git diff --check` passed. The controller milestone remains open until the required PLECS captures and text-scale checks are recorded for representative layouts. |
+| L14 | Documentation complete; visual gate pending | README, skill usage, conventions and controller spec were updated. The API and CLI examples rerun on 2026-10-03 both returned accepted/quality 0. The latest full suite passed (127 tests); all four skill validations and `git diff --check` passed. The controller milestone remains open until the required PLECS captures and text-scale checks are recorded for representative layouts. |
 
 ### Closure evidence (2026-10-02)
 
@@ -398,10 +399,10 @@ after approval. Power-stage work remains outside this plan.
   four skill validators passed; the documented API returned accepted/score 0; the documented CLI
   returned accepted/quality 0; `git diff --check` reported no whitespace errors and the existing
   CRLF warning for `autolayout.py`.
-- Remaining L13 work: retain PLECS GUI captures and screen-to-schematic text measurements for the
-  representative layouts. Feedback and unequal-size Subsystem layouts currently have automated
-  checks but no retained PLECS simulation/capture evidence. Keep L13 and dependent L14 partial
-  until those artifacts and visual checks are complete.
+- Remaining L13 work at that point: retain PLECS GUI captures and screen-to-schematic text
+  measurements for representative layouts. Sprint 2 later added retained PLECS simulation
+  evidence for feedback and unequal-size Subsystem layouts; their GUI captures and text measurements
+  remain open. Keep L13 and dependent L14 partial until those artifacts and visual checks are complete.
 
 ### Execution update (2026-10-03, Sprint 1 approved and merged)
 
@@ -424,7 +425,7 @@ after approval. Power-stage work remains outside this plan.
   and unequal-Subsystem simulation/capture evidence is recorded in the following update. Keep
   L13/L14 partial until the visual captures and text measurements are complete.
 
-### Execution update (2026-10-03, Sprint 2 implementation candidate)
+### Execution update (2026-10-03, Sprint 2 implementation slice merged; visual gate open)
 
 - Corrected the authored Subsystem fixture to use the measured output terminal offset beyond the
   frame. Preserved exact 20 px orthogonal tag stubs for off-grid measured ports by serializing
@@ -444,13 +445,15 @@ after approval. Power-stage work remains outside this plan.
   internal generated-tag path, documented its reserved names and narrow exception, and added
   reserved-prefix and name/type mismatch regressions. After that review follow-up, `pytest -q`
   passed (127 tests), all four skill validators passed, the documented API and CLI examples
-  returned accepted/quality `0`, and `git diff --check`
-  passed. GPT Sol's initial Sprint 2 review approved the implementation slice against `main` at
-  `56a823a`. GPT Sol approved committing and fast-forwarding this implementation slice; the
-  standards review found no blockers. This does not close the separate C1/L13/L14 visual gates.
+  returned accepted/quality `0`, and `git diff --check` passed. GPT Sol approved the implementation
+  slice against `main` at `56a823a`; commit `1f1b993` was fast-forwarded into local `main`. The
+  standards review found no blockers. This implementation merge does not close the separate
+  C1/L13/L14 visual gates.
 - CUA reports no native app surfaces, so no native PLECS screenshot or screen-to-schematic text
   measurement was captured. The user has been asked to attach the `enabled_subsystem` properties
-  view and full-sheet captures of the synthetic, feedback and unequal-Subsystem models. L13/L14
-  remain partial until those visual checks are recorded.
+  view and full-sheet captures of the synthetic, feedback and unequal-Subsystem models. A blank
+  worksheet with model paths, expected coordinates, scale conversion and text-bound fields is
+  prepared at `D:\codex-envs\plecs-expert-skill\evidence\2026-10-03-layout-review\visual-measurement-worksheet-2026-10-03.md`.
+  L05 and L13/L14 remain partial until those visual checks are recorded.
 
 The power-stage improvement remains the separate follow-up described above. No Plexim demos, client models/data or generated calibration products were added.
