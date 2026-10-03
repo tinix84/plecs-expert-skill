@@ -75,15 +75,18 @@ class Sheet:
         self._conns: list[str] = []
         self.names: set[str] = set()
 
-    def _pt(self, p):
-        return (snap(p[0], self.grid), snap(p[1], self.grid))
+    def _pt(self, p, snap_position=True):
+        if snap_position:
+            return (snap(p[0], self.grid), snap(p[1], self.grid))
+        return tuple(int(value) if int(value) == value else value for value in p)
 
-    def add(self, kind: str, name: str, at, direction: str = "right", flipped: bool = False,
-            params: dict | None = None, label: str = "north", show_name: bool = True) -> str:
+    def _add(self, kind: str, name: str, at, direction: str = "right", flipped: bool = False,
+             params: dict | None = None, label: str = "north", show_name: bool = True,
+             snap_position: bool = True) -> str:
         if name in self.names:
             raise ValueError(f"duplicate component name {name!r}")
         self.names.add(name)
-        x, y = self._pt(at)
+        x, y = self._pt(at, snap_position)
         body = [
             "Component {", f"  Type          {kind}", f"  Name          {json.dumps(name)}",
             f"  Show          {'on' if show_name else 'off'}", f"  Position      [{x}, {y}]",
@@ -98,6 +101,10 @@ class Sheet:
                      f"    Value         {json.dumps(str(val))}", "    Show          off", "  }"]
         self._comps.append("\n".join(body + ["}"]))
         return name
+
+    def add(self, kind: str, name: str, at, direction: str = "right", flipped: bool = False,
+            params: dict | None = None, label: str = "north", show_name: bool = True) -> str:
+        return self._add(kind, name, at, direction, flipped, params, label, show_name)
 
     def add_component(self, component: pf.Block, *, at=None, direction=None, flipped=None) -> str:
         """Copy a parsed Component, changing only its requested layout fields."""
@@ -128,6 +135,13 @@ class Sheet:
     def from_(self, name, tag, at, visibility=LOCAL, direction="right", label="south"):
         return self.add("From", name, at, direction, params={"Tag": tag, "Visibility": visibility},
                         label=label, show_name=False)
+
+    def _generated_tag(self, kind, name, tag, at, direction="right", label="south"):
+        """Emit a controller-generated tag at its exact port-stub position."""
+        if kind not in {"Goto", "From"}:
+            raise ValueError("generated controller tags must be Goto or From blocks")
+        return self._add(kind, name, at, direction, params={"Tag": tag, "Visibility": LOCAL},
+                         label=label, show_name=False, snap_position=False)
 
     def label(self, name, tag, at, visibility=LOCAL, direction="right"):
         """Electrical Label: joins electrical nets that carry the same tag."""

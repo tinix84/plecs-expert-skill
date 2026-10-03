@@ -82,6 +82,124 @@ def multiport_controller():
     )
 
 
+def _subsystem_template(name, half_width, half_height, gain):
+    """Build a small authored Subsystem using the measured PLECS interface record form."""
+    component = f'''Component {{
+  Type Subsystem
+  Name "{name}"
+  Show on
+  Position [500, 200]
+  Direction up
+  Flipped off
+  LabelPosition south
+  Frame [-{half_width}, -{half_height}; {half_width}, {half_height}]
+  TreatAsAtomicUnit on
+  SampleTime "-1"
+  Terminal {{
+    Type Input
+    Position [-{half_width}, 0]
+    Direction left
+    Index "1"
+  }}
+  Terminal {{
+    Type Output
+    Position [{half_width + 4}, 0]
+    Direction right
+    Index "1"
+  }}
+  Schematic {{
+    Location [73, 647; 414, 920]
+    ZoomFactor 1
+    Component {{
+      Type Input
+      Name "In"
+      Show on
+      Position [60, 80]
+      Direction right
+      Flipped off
+      LabelPosition south
+      Parameter {{ Variable "Index" Value "1" Show on }}
+      Parameter {{ Variable "DataType" Value "10" Show off }}
+      Parameter {{ Variable "Width" Value "-1" Show off }}
+    }}
+    Component {{
+      Type Output
+      Name "Out"
+      Show on
+      Position [255, 80]
+      Direction right
+      Flipped off
+      LabelPosition south
+      Parameter {{ Variable "Index" Value "2" Show on }}
+      Parameter {{ Variable "OutputWhenDisabled" Value "1" Show off }}
+      Parameter {{ Variable "InitialOutput" Value "0" Show off }}
+      Parameter {{ Variable "Width" Value "-1" Show off }}
+    }}
+    Component {{
+      Type Gain
+      Name "K"
+      Show on
+      Position [120, 80]
+      Direction right
+      Flipped off
+      LabelPosition south
+      Parameter {{ Variable "K" Value "{gain}" Show off }}
+    }}
+    Connection {{
+      Type Signal
+      SrcComponent "In"
+      SrcTerminal 1
+      DstComponent "K"
+      DstTerminal 1
+    }}
+    Connection {{
+      Type Signal
+      SrcComponent "K"
+      SrcTerminal 2
+      DstComponent "Out"
+      DstTerminal 1
+    }}
+  }}
+}}'''
+    return pf.parse(component).children[0]
+
+
+def unequal_subsystem_controller():
+    """Return a two-Subsystem chain for measured geometry and PLECS simulation checks."""
+    netlist = Netlist()
+    netlist.part("Reference", "Constant", {"Value": "1"}, zone="source")
+    netlist.part("Small", "Subsystem", zone="control",
+                 component=_subsystem_template("Small", 25, 15, 2))
+    netlist.part("Large", "Subsystem", zone="control",
+                 component=_subsystem_template("Large", 50, 40, 3))
+    netlist.part("Result", "Output", {"Index": "1", "Width": "-1"}, zone="output")
+    netlist.net("reference", "Signal", [("Reference", 1), ("Small", 1)])
+    netlist.net("between", "Signal", [("Small", 2), ("Large", 1)])
+    netlist.net("result", "Signal", [("Large", 2), ("Result", 1)])
+    return blockdiagram.layout(netlist, zones=["source", "control", "output"])
+
+
+def feedback_controller():
+    """Return a first-order closed-loop controller for feedback simulation checks."""
+    sum_sheet = Sheet()
+    sum_sheet.add("Sum", "Error", (100, 100), direction="right",
+                  params={"Inputs": "|+-", "IconShape": "2"}, show_name=False)
+    sum_template = pf.schematic(pf.parse(sum_sheet.model("template"))).children_of("Component")[0]
+
+    netlist = Netlist()
+    netlist.part("Reference", "Constant", {"Value": "1"}, zone="source")
+    netlist.part("Error", "Sum", {"Inputs": "|+-", "IconShape": "2"}, zone="control",
+                 component=sum_template)
+    netlist.part("Gain", "Gain", {"K": "1"}, zone="control")
+    netlist.part("State", "Integrator", zone="control")
+    netlist.part("Result", "Output", {"Index": "1", "Width": "-1"}, zone="output")
+    netlist.net("reference", "Signal", [("Reference", 1), ("Error", 2)])
+    netlist.net("error", "Signal", [("Error", 1), ("Gain", 1)])
+    netlist.net("derivative", "Signal", [("Gain", 2), ("State", 1)])
+    netlist.net("feedback", "Signal", [("State", 2), ("Error", 3), ("Result", 1)])
+    return blockdiagram.layout(netlist, zones=["source", "control", "output"])
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("-o", "--out", type=Path, default=Path("controller.plecs"))

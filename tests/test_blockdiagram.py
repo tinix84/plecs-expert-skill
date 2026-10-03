@@ -43,7 +43,7 @@ def subsystem_template(name, half_width, half_height):
   }}
   Terminal {{
     Type Output
-    Position [{half_width}, 0]
+    Position [{half_width + 4}, 0]
     Direction right
     Index "1"
   }}
@@ -132,7 +132,7 @@ def test_subsystem_template_supplies_controller_frame_and_port_roles():
   }
   Terminal {
     Type Output
-    Position [30, 0]
+    Position [29, 0]
     Direction right
     Index "1"
   }
@@ -154,7 +154,7 @@ def test_subsystem_template_supplies_controller_frame_and_port_roles():
     resolved, roles = blockdiagram._validate(netlist, 5)
 
     assert resolved["Controller"][2].box == (-25, -15, 25, 15)
-    assert resolved["Controller"][2].terminals == {"1": (-25, 0), "2": (30, 0)}
+    assert resolved["Controller"][2].terminals == {"1": (-25, 0), "2": (29, 0)}
     assert roles["Controller"] == {"1": "in", "2": "out"}
 
     sheet, report = blockdiagram.layout(netlist, zones=["control", "output"])
@@ -165,7 +165,7 @@ def test_subsystem_template_supplies_controller_frame_and_port_roles():
     assert [(term.get("Type"), term.get("Position"))
             for term in emitted.children_of("Terminal")] == [
         ("Input", "[-25, 0]"),
-        ("Output", "[30, 0]"),
+        ("Output", "[29, 0]"),
     ]
 
 
@@ -472,4 +472,35 @@ def test_authored_multiport_controller_has_zero_quality_score():
     assert report["quality"]["accepted"]
     assert report["routed"] == ["input_a", "input_b", "output_x", "output_y"]
     assert report["tagged"] == []
+    assert [finding for finding in sheet.lint() if finding.severity == "error"] == []
+
+
+def test_authored_unequal_subsystem_controller_uses_measured_ports():
+    sheet, report = example_blockdiagram.unequal_subsystem_controller()
+
+    emitted = components(sheet)
+    assert report["quality"]["accepted"]
+    assert report["quality"]["weighted_total"] == 0
+    assert emitted["Small"].get("Frame") == "[-25, -15; 25, 15]"
+    assert [(term.get("Type"), term.get("Position"))
+            for term in emitted["Small"].children_of("Terminal")] == [
+        ("Input", "[-25, 0]"),
+        ("Output", "[29, 0]"),
+    ]
+    assert emitted["Large"].get("Frame") == "[-50, -40; 50, 40]"
+    assert [(term.get("Type"), term.get("Position"))
+            for term in emitted["Large"].children_of("Terminal")] == [
+        ("Input", "[-50, 0]"),
+        ("Output", "[54, 0]"),
+    ]
+    assert emitted["Small"].child("Schematic") is not None
+    assert emitted["Large"].child("Schematic") is not None
+
+
+def test_authored_feedback_controller_has_an_accepted_tagged_cycle():
+    sheet, report = example_blockdiagram.feedback_controller()
+
+    assert report["quality"]["accepted"]
+    assert report["quality"]["weighted_total"] == 0
+    assert "feedback" in report["tagged"]
     assert [finding for finding in sheet.lint() if finding.severity == "error"] == []

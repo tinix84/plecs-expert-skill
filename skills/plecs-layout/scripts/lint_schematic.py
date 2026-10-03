@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -134,6 +135,30 @@ def _terminal_ends(conn, root=True):
     return out
 
 
+def _auto_tag_has_exact_stub(name, component, components, connections):
+    """Allow reserved generated tag names off-grid only for matching 20 px port legs."""
+    match = re.fullmatch(r"__blockdiagram_[0-9]+_(goto|from_[1-9][0-9]*)(?:_*)", name)
+    kind = component.get("Type")
+    if (match is None or kind not in {"Goto", "From"}
+            or (kind == "Goto") != (match.group(1) == "goto")):
+        return False
+    for connection in connections:
+        if (connection.get("Type") != "Signal" or pf.points(connection)
+                or connection.children_of("Branch")):
+            continue
+        ends = _terminal_ends(connection)
+        own = [(part, terminal) for part, terminal in ends if part == name]
+        other = [(part, terminal) for part, terminal in ends if part != name]
+        if len(own) != 1 or len(other) != 1 or other[0][0] not in components:
+            continue
+        tag_point = _terminal_point(components, *own[0])
+        peer_point = _terminal_point(components, *other[0])
+        dx, dy = abs(tag_point[0] - peer_point[0]), abs(tag_point[1] - peer_point[1])
+        if dx + dy == 20 and (dx == 0 or dy == 0):
+            return True
+    return False
+
+
 def _endpoints(conn) -> set:
     names = {conn.get("SrcComponent"), conn.get("DstComponent")}
     for br in conn.children_of("Branch"):
@@ -213,6 +238,7 @@ def _cross(s, t) -> bool:
 def _lint_level(sch, path, grid, tags) -> list:
     out = []
     comps = {c.get("Name"): c for c in sch.children_of("Component")}
+    connections = sch.children_of("Connection")
     kinds = [b.kind for b in sch.children if b.kind in ("Component", "Connection")]
     if "Connection" in kinds and "Component" in kinds[kinds.index("Connection"):]:
         out.append(Finding("order", "error", path, "-",
@@ -220,7 +246,8 @@ def _lint_level(sch, path, grid, tags) -> list:
 
     for name, c in comps.items():
         p = c.position
-        if p and (p[0] % grid or p[1] % grid):
+        if (p and (p[0] % grid or p[1] % grid)
+                and not _auto_tag_has_exact_stub(name, c, comps, connections)):
             out.append(Finding("grid", "error", path, name, f"Position {p} is off the {grid} px grid"))
         kind = c.get("Type")
         if kind in TAG_BLOCKS:

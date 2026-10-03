@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import geometry  # noqa: E402
 import lint_schematic  # noqa: E402
-from layout import LOCAL, Sheet, snap  # noqa: E402
+from layout import Sheet, snap  # noqa: E402
 
 
 FIXED_ORIENTATION = {
@@ -180,7 +180,6 @@ def _tag_placement(part, shape, terminal, role, tag_name, grid=5):
     terminal_offset = tag_shape.terminals["1"]
     tag_center = (desired_terminal[0] - terminal_offset[0],
                   desired_terminal[1] - terminal_offset[1])
-    tag_center = (snap(tag_center[0], grid), snap(tag_center[1], grid))
     tag_shape = geometry.shape(tag_kind, tag_center, tag_direction, False, {})
     actual_terminal = geometry.terminal(tag_shape, 1, tag_center)
     if (abs(actual_terminal[0] - terminal[0]) + abs(actual_terminal[1] - terminal[1]) != TAG_STUB
@@ -675,7 +674,8 @@ def _emit_tags(sheet, net, net_index, pins, placements, used_names):
         goto_name += "_"
     used_names.add(goto_name)
     goto = placements[0]
-    sheet.goto(goto_name, net.name, goto["center"], LOCAL, goto["direction"], goto["label"])
+    sheet._generated_tag("Goto", goto_name, net.name, goto["center"],
+                         goto["direction"], goto["label"])
     sheet.signal(pins[0][:2], (goto_name, "1"))
     segments = [(net.name, pins[0][2], goto["terminal"])]
     for receiver_index, (pin, placement) in enumerate(zip(pins[1:], placements[1:]), start=1):
@@ -683,8 +683,8 @@ def _emit_tags(sheet, net, net_index, pins, placements, used_names):
         while from_name in used_names:
             from_name += "_"
         used_names.add(from_name)
-        sheet.from_(from_name, net.name, placement["center"], LOCAL, placement["direction"],
-                    placement["label"])
+        sheet._generated_tag("From", from_name, net.name, placement["center"],
+                             placement["direction"], placement["label"])
         sheet.signal((from_name, "1"), pin[:2])
         segments.append((net.name, placement["terminal"], pin[2]))
     return segments

@@ -1,4 +1,5 @@
 """Integration tests against a running PLECS (XML-RPC on localhost:1080). Skipped when PLECS is not running."""
+import math
 import socket
 import sys
 import xmlrpc.client
@@ -11,6 +12,8 @@ from autolayout import Netlist  # noqa: E402
 from layout import GLOBAL, LOCAL, Sheet, Zone  # noqa: E402
 from example_blockdiagram import controller as blockdiagram_controller  # noqa: E402
 from example_blockdiagram import multiport_controller as blockdiagram_multiport_controller  # noqa: E402
+from example_blockdiagram import feedback_controller as blockdiagram_feedback_controller  # noqa: E402
+from example_blockdiagram import unequal_subsystem_controller as blockdiagram_unequal_subsystem_controller  # noqa: E402
 
 URL = "http://localhost:1080/RPC2"
 
@@ -130,3 +133,22 @@ def test_blockdiagram_multiport_controller_preserves_channel_values(tmp_path):
     assert len(result["Values"]) == 2
     assert result["Values"][0][-1] == pytest.approx(1.0, abs=1e-6)
     assert result["Values"][1][-1] == pytest.approx(2.0, abs=1e-6)
+
+
+def test_blockdiagram_unequal_subsystems_load_and_simulate(tmp_path):
+    rpc = _rpc()
+    sheet, report = blockdiagram_unequal_subsystem_controller()
+    assert report["quality"]["accepted"]
+
+    result = _simulate(rpc, sheet, "it_blockdiagram_unequal_subsystems", tmp_path)
+    assert result["Values"][0][-1] == pytest.approx(6.0, abs=1e-6)
+
+
+def test_blockdiagram_feedback_loop_loads_and_simulates(tmp_path):
+    rpc = _rpc()
+    sheet, report = blockdiagram_feedback_controller()
+    assert report["quality"]["accepted"]
+
+    result = _simulate(rpc, sheet, "it_blockdiagram_feedback", tmp_path, time_span="5")
+    # dy/dt = 1 - y from y(0)=0, so y(5) = 1 - exp(-5).
+    assert result["Values"][0][-1] == pytest.approx(1.0 - math.exp(-5), abs=1e-6)

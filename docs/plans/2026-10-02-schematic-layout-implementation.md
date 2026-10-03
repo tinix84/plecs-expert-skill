@@ -349,8 +349,8 @@ after approval. Power-stage work remains outside this plan.
 | L06-L08 | Implemented | Connectivity difference checking, same-zone forced signal tags, text envelopes and preview reservations have regression coverage. |
 | L09-L11 | Implemented; dependent regressions rechecked | Deterministic controller placement, straight-wire/tag emission, report scoring and strict `accepted` status are integrated, including the verified Subsystem template form. Placement geometry uses the resolved controller orientation before reserving space; a right-oriented C-Script template regression verifies normalization to up. A connected four-port C-Script and unequal-size Subsystem chain pass layout checks. If forced local tags on adjacent multiport terminals overlap, layout raises `LayoutError` with `tag_spacing_conflict`; it does not return a colliding sheet. |
 | L12 | Implemented with stated limits | Nested sheet paths and local/global tag scopes are checked. Masked/code-generation visibility and automatic subsystem boundary traversal remain unsupported. |
-| L13 | Partial | The single-channel synthetic controller and connected two-channel C-Script controller were loaded and simulated in PLECS Standalone 4.9.8; final outputs were `1.0` and `[1.0, 2.0]`, respectively, within `1e-6` absolute tolerance. Models, previews, reports and simulation results are retained outside the repository. Automated layout tests cover feedback, fanout, connected multiport wiring and unequal-size Subsystems, but representative PLECS simulations/captures for feedback and unequal-size Subsystems are not retained. No GUI capture or screen-scale text comparison is retained, so visual acceptance remains open. |
-| L14 | Documentation complete; visual gate pending | README, skill usage, conventions and controller spec were updated. Both documented API/CLI examples ran; the latest full suite passed (110 tests); all four skill validations passed; `git diff --check` reported only the existing `autolayout.py` CRLF warning. The controller milestone remains open until the required PLECS captures and text-scale checks are recorded for representative layouts. |
+| L13 | Partial | The single-channel synthetic controller and connected two-channel C-Script controller were loaded and simulated in PLECS Standalone 4.9.8; final outputs were `1.0` and `[1.0, 2.0]`, respectively, within `1e-6` absolute tolerance. Sprint 2 also retained PLECS simulations for feedback and unequal-size Subsystem models. Their native GUI captures and screen-scale text comparisons remain outstanding, so visual acceptance is open. |
+| L14 | Documentation complete; visual gate pending | README, skill usage, conventions and controller spec were updated. The API and CLI examples rerun on 2026-10-03 both returned accepted/quality 0. The latest full suite passed (126 tests); all four skill validations and `git diff --check` passed. The controller milestone remains open until the required PLECS captures and text-scale checks are recorded for representative layouts. |
 
 ### Closure evidence (2026-10-02)
 
@@ -403,7 +403,7 @@ after approval. Power-stage work remains outside this plan.
   checks but no retained PLECS simulation/capture evidence. Keep L13 and dependent L14 partial
   until those artifacts and visual checks are complete.
 
-### Execution update (2026-10-03, Sprint 1 candidate)
+### Execution update (2026-10-03, Sprint 1 approved and merged)
 
 - GPT Sol's independent merge review found four acceptance gaps: orthogonal bends, wires through
   displayed text, untagged direct connections under `max_wire=0`, and column snapping below the
@@ -413,14 +413,44 @@ after approval. Power-stage work remains outside this plan.
 - The scoring table now documents the text-wire, missing-tag and unknown-tag gates. The documented
   API example and CLI example both report accepted quality `0`; the CLI model and SVG are retained
   outside the repository as `documented_cli_example-final.plecs` and `.svg`.
-- Latest verification: `pytest -q` passed (119 tests); all four skill validators passed;
-  `git diff --check` found no whitespace errors and reported the existing `autolayout.py` CRLF
-  warning. The final GPT Sol review of this exact candidate is pending; Sprint 1 must not be
-  committed or merged until it approves the complete diff against `main`.
+- Latest verification before merge: `pytest -q` passed (119 tests); all four skill validators
+  passed; `git diff --check` found no whitespace errors and reported the existing `autolayout.py`
+  CRLF warning. GPT Sol approved the full candidate against `main` at `6e400aa`; `a3d5ce7` was
+  the feature branch's preceding HEAD. Commit `56a823a` was fast-forwarded into local `main`.
 - A PLECS 4.9.8 GUI screenshot of the installed `enabled_subsystem` fixture is retained outside
   the repository as `enabled_subsystem-plecs-ui.jpg`. The capture does not yet establish
   independent screen-coordinate frame/terminal measurements. The synthetic-controller PLECS
-  capture, screen-scale text measurement, and feedback/unequal-Subsystem simulation/capture are
-  still outstanding. Keep L13/L14 partial and continue with Sprints 2 and 3 above.
+  capture and screen-scale text measurement remained outstanding at Sprint 1 completion. Feedback
+  and unequal-Subsystem simulation/capture evidence is recorded in the following update. Keep
+  L13/L14 partial until the visual captures and text measurements are complete.
+
+### Execution update (2026-10-03, Sprint 2 implementation candidate)
+
+- Corrected the authored Subsystem fixture to use the measured output terminal offset beyond the
+  frame. Preserved exact 20 px orthogonal tag stubs for off-grid measured ports by serializing
+  generated Goto/From positions at their required coordinates. The linter allows an off-grid
+  generated tag position only when a Signal connection joins it to one component terminal through
+  exactly one 20 px orthogonal leg; arbitrary off-grid tags remain errors.
+- Added authored feedback and unequal-size Subsystem controller examples with unit and PLECS
+  integration tests. PLECS Standalone 4.9.8 loaded and simulated both: the unequal Subsystem chain
+  returned `6.0` (expected `6.0`), and the closed-loop integrator returned `0.9932620530009163`
+  at 5 s (expected `1 - exp(-5) = 0.9932620530009145`); both use absolute tolerance `1e-6`.
+- Models, SVG previews, layout reports and simulation results are retained outside the repository
+  under `D:\codex-envs\plecs-expert-skill\evidence\2026-10-03-layout-review\` with basenames
+  `unequal_subsystem_controller` and `feedback_controller`.
+- Focused verification passed: `pytest -q tests/test_blockdiagram.py tests/test_lint.py
+  tests/test_plecs_integration.py` (62 passed, including the live PLECS simulations). The standards
+  review tightened the generated-tag name check, confined exact-position serialization to the
+  internal generated-tag path, documented its reserved names and narrow exception, and added
+  reserved-prefix and name/type mismatch regressions. After that review follow-up, `pytest -q`
+  passed (127 tests), all four skill validators passed, the documented API and CLI examples
+  returned accepted/quality `0`, and `git diff --check`
+  passed. GPT Sol's initial Sprint 2 review approved the implementation slice against `main` at
+  `56a823a`. GPT Sol approved committing and fast-forwarding this implementation slice; the
+  standards review found no blockers. This does not close the separate C1/L13/L14 visual gates.
+- CUA reports no native app surfaces, so no native PLECS screenshot or screen-to-schematic text
+  measurement was captured. The user has been asked to attach the `enabled_subsystem` properties
+  view and full-sheet captures of the synthetic, feedback and unequal-Subsystem models. L13/L14
+  remain partial until those visual checks are recorded.
 
 The power-stage improvement remains the separate follow-up described above. No Plexim demos, client models/data or generated calibration products were added.

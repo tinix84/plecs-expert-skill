@@ -53,6 +53,79 @@ def test_off_grid_position_and_point():
     assert codes(text).count("grid") == 2
 
 
+def test_generated_tag_keeps_exact_stub_from_off_grid_measured_port():
+    text = model(
+        '''    Component {
+      Type Subsystem
+      Name "Sub"
+      Show on
+      Position [100, 100]
+      Direction up
+      Flipped off
+      Frame [-25, -15; 25, 15]
+      Terminal {
+        Type Output
+        Position [29, 0]
+        Direction right
+        Index "1"
+      }
+    }
+''',
+        comp("Goto", "__blockdiagram_0_goto", (159, 100),
+             {"Tag": "out", "Visibility": "2"}, direction="right", show="off"),
+        conn("Sub", 1, "__blockdiagram_0_goto", 1),
+    )
+
+    assert "grid" not in codes(text)
+
+
+def test_arbitrary_off_grid_tag_still_reports_grid_error():
+    text = model(
+        comp("Constant", "Source", (100, 100)),
+        comp("Goto", "G", (159, 100), {"Tag": "out", "Visibility": "2"}, show="off"),
+        conn("Source", 1, "G", 1),
+    )
+
+    assert "grid" in codes(text)
+
+
+def test_reserved_prefix_without_generated_tag_name_shape_reports_grid_error():
+    text = model(
+        comp("Constant", "Source", (100, 100)),
+        comp("Goto", "__blockdiagram_manual", (159, 100),
+             {"Tag": "out", "Visibility": "2"}, show="off"),
+        conn("Source", 1, "__blockdiagram_manual", 1),
+    )
+
+    assert "grid" in codes(text)
+
+
+def test_generated_tag_name_shape_must_match_block_type():
+    text = model(
+        '''    Component {
+      Type Subsystem
+      Name "Sub"
+      Show on
+      Position [100, 100]
+      Direction up
+      Flipped off
+      Frame [-25, -15; 25, 15]
+      Terminal {
+        Type Output
+        Position [29, 0]
+        Direction right
+        Index "1"
+      }
+    }
+''',
+        comp("Goto", "__blockdiagram_0_from_1", (159, 100),
+             {"Tag": "out", "Visibility": "2"}, direction="right", show="off"),
+        conn("Sub", 1, "__blockdiagram_0_from_1", 1),
+    )
+
+    assert "grid" in codes(text)
+
+
 def test_diagonal_segment_between_points():
     text = model(comp("Gain", "A", (100, 100)), comp("Gain", "B", (300, 300)),
                  conn("A", 2, "B", 1, points=[(200, 100), (250, 300)]))

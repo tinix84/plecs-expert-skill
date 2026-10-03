@@ -76,8 +76,11 @@ if not report["quality"]["accepted"]:
     raise ValueError(report["quality"]["findings"])
 ```
 
-The controller path accepts only grid 5, resolves geometry from measured variants or explicit
-parsed component records, and rejects unknown geometry or port roles. It reports lint,
+The controller path places blocks and route points on a 5 px grid and requires fixed input
+coordinates to align to that grid. The reserved `__blockdiagram_<net>_goto` and
+`__blockdiagram_<net>_from_<receiver>` names identify generated tags, which may sit off-grid only
+to preserve an exact 20 px orthogonal port stub. The path resolves geometry from measured variants
+or explicit parsed component records, and rejects unknown geometry or port roles. It reports lint,
 connectivity, routing, coverage and drawing metrics separately. C-Script parameters must resolve
 to a calibrated variant; parameter expressions are unsupported. A Subsystem template must carry
 valid `Frame` and ordered `Terminal Position` records and currently must use `Direction up` and
