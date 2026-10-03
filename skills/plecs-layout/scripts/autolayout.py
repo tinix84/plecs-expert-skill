@@ -31,6 +31,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import geometry  # noqa: E402
 from layout import LOCAL, Sheet, snap  # noqa: E402
+import lint_schematic as lint  # noqa: E402
+import plecs_file as pf  # noqa: E402
 from router import Router  # noqa: E402
 
 ORIENTATIONS = [(d, f) for d in ("right", "down", "left", "up") for f in (False, True)]
@@ -38,6 +40,28 @@ DETOUR_FACTOR = 2.5   # a route longer than this times its direct length becomes
 DETOUR_SLACK = 40     # ... plus this many grid steps
 TAG_GAP = 20          # distance from a terminal to its tag block
 GROUND_DROP = 40      # a Ground sits this far below the lowest terminal of its net
+
+
+def _tag_text_clear(sheet, kind, tag, at, direction):
+    tag_shape = geometry.shape(kind, at, direction, False, {})
+    x0, y0, x1, y1 = tag_shape.box
+    tag_text = geometry.estimate_text_box(
+        tag, ((x0 + x1) / 2, y1 + geometry.TEXT_GAP + geometry.TEXT_HEIGHT / 2))
+    root = pf.parse(sheet.model("tag-space"))
+    schematic = pf.schematic(root)
+    for component in schematic.children_of("Component"):
+        if component.position is None:
+            continue
+        shape = lint._shape(component)
+        records, _ = lint.text_envelopes(component, shape)
+        if lint._rects_overlap(tag_text, shape.box):
+            return False
+        for record in records:
+            if lint._rects_overlap(tag_shape.box, record["box"]):
+                return False
+            if lint._rects_overlap(tag_text, record["box"]):
+                return False
+    return True
 
 # Drawing conventions: this terminal faces this side. Sources stand vertical with terminal 1
 # (+) on top; Ground has its terminal on top, so the symbol points down.
@@ -59,6 +83,10 @@ class Part:
     oriented: bool = False       # direction/flip given by the caller
     row: int | None = None       # grid hint inside the zone
     col: int | None = None
+    component: pf.Block | None = None
+    requested_pos: tuple | None = None
+    direction_explicit: bool = False
+    flipped_explicit: bool = False
 
 
 @dataclass
@@ -75,13 +103,39 @@ class Netlist:
     nets: list = field(default_factory=list)
 
     def part(self, name, kind, params=None, zone="main", direction=None, flipped=None, at=None,
-             row=None, col=None):
+             row=None, col=None, component=None):
         """Add a part. row/col place it on its zone's grid (col 0 is the zone's left edge)."""
-        p = Part(name, kind, dict(params or {}), zone, row=row, col=col)
+        part_params = dict(params or {})
+        if component is not None:
+            if not isinstance(component, pf.Block) or component.kind != "Component":
+                raise ValueError("component must be a parsed Component block")
+            if component.get("Name") != name or component.get("Type") != kind:
+                raise ValueError("component template Name or Type does not match the part")
+            template_params = {
+                parameter.get("Variable"): parameter.get("Value")
+                for parameter in component.children_of("Parameter")
+                if parameter.get("Variable") is not None
+            }
+            if component.get("Axes") is not None:
+                template_params["@Axes"] = component.get("Axes")
+            if params is None:
+                part_params = template_params
+            elif {str(k): str(v) for k, v in part_params.items()} != template_params:
+                raise ValueError("part parameters differ from component template")
+
+        p = Part(name, kind, part_params, zone, row=row, col=col, component=component,
+                 requested_pos=tuple(at) if at is not None else None)
         if direction:
             p.direction, p.oriented = direction, True
+            p.direction_explicit = True
+        elif component is not None and component.get("Direction"):
+            p.direction, p.oriented = component.get("Direction"), True
         if flipped is not None:
             p.flipped, p.oriented = flipped, True
+            p.flipped_explicit = True
+        elif component is not None and component.get("Flipped") is not None:
+            p.flipped = component.get("Flipped") == "on"
+            p.oriented = True
         if at:
             p.pos, p.fixed = (snap(at[0]), snap(at[1])), True
         self.parts[name] = p
@@ -242,7 +296,8 @@ class Netlist:
         """
         grounded = self._grounded_pins()
         for p in self.parts.values():
-            if p.oriented or not geometry.is_measured(p.kind) or p.kind in STYLE:
+            measured = geometry.shape(p.kind, p.pos, p.direction, p.flipped, p.params).measured
+            if p.oriented or not measured or p.kind in STYLE:
                 continue
             elec = [t for t in ("1", "2") if (p.name, t) in grounded]
             if len(elec) != 1:
@@ -255,7 +310,8 @@ class Netlist:
                     break
         for p in self.parts.values():
             rule = STYLE.get(p.kind)
-            if p.oriented or not rule or not geometry.is_measured(p.kind):
+            measured = geometry.shape(p.kind, p.pos, p.direction, p.flipped, p.params).measured
+            if p.oriented or not rule or not measured:
                 continue
             term, side = rule
             for d, f in sorted(ORIENTATIONS, key=lambda o: o[1]):
@@ -309,10 +365,10 @@ class Netlist:
             for part, term in n.pins:
                 pin_nets[(part, str(term))].append(n)
         for p in self.parts.values():
-            if p.oriented or not geometry.is_measured(p.kind):
+            if p.oriented:
                 continue
             base = geometry.shape(p.kind, p.pos, p.direction, p.flipped, p.params)
-            if len(base.terminals) != 2:
+            if not base.measured or len(base.terminals) != 2:
                 continue
 
             def cost(o):
@@ -345,12 +401,23 @@ class Netlist:
         sheet = Sheet(grid)
         router = Router(grid=grid)
         for p in self.parts.values():
-            sheet.add(p.kind, p.name, p.pos, p.direction, p.flipped,
-                      {k: v for k, v in p.params.items() if not k.startswith("@")})
+            if p.component is not None:
+                sheet.add_component(p.component, at=p.pos, direction=p.direction, flipped=p.flipped)
+            else:
+                sheet.add(p.kind, p.name, p.pos, p.direction, p.flipped, p.params)
             router.add_obstacle(p.name, geometry.shape(p.kind, p.pos, p.direction, p.flipped, p.params).box)
 
+        geometry_coverage = []
+        for p in sorted(self.parts.values(), key=lambda part: part.name):
+            shape = geometry.shape(p.kind, p.pos, p.direction, p.flipped, p.params)
+            if shape.measured:
+                continue
+            issue = geometry.coverage_issue(p.kind, p.params, p.direction, p.flipped)
+            if issue is not None:
+                geometry_coverage.append({"component": p.name, **issue})
         report = {"routed": [], "tagged": [],
-                  "unmeasured": sorted({p.kind for p in self.parts.values() if not geometry.is_measured(p.kind)})}
+                  "unmeasured": sorted({issue["kind"] for issue in geometry_coverage}),
+                  "geometry_coverage": geometry_coverage}
 
         def span(n):
             pts = [self._terminal(a, t) for a, t in n.pins]
@@ -393,6 +460,9 @@ class Netlist:
     def _tag(self, sheet, router, n, pins):
         """Replace a net by one tag per zone: pins of a zone are wired together as usual and
         reach the other zones through a tag (Goto/From for signals, electrical Label for wires)."""
+        if n.kind == "Signal" and n.tag is not None:
+            self._tag_signal_receivers(sheet, router, n, pins)
+            return
         tag = n.tag or n.name
         groups: dict = {}
         for pin in pins:
@@ -407,20 +477,24 @@ class Netlist:
             if (ux, uy) == (0, 0):
                 ux = 1 if (driver or n.kind == "Wire") else -1
             at = (snap(ex + ux * TAG_GAP), snap(ey + uy * TAG_GAP))
-            while any(b[0] - 12 < at[0] < b[2] + 12 and b[1] - 10 < at[1] < b[3] + 10
-                      for b in router.boxes.values()):
-                at = (at[0] + ux * 10, at[1] + uy * 10)
-            name = f"{tag}_{part}_{term}"
             direction = {(1, 0): "right", (-1, 0): "left", (0, 1): "down", (0, -1): "up"}[(ux, uy)]
             if n.kind == "Wire":
                 kind, tag_dir = "Label", direction
-                sheet.label(name, tag, at, LOCAL, tag_dir)
             elif driver:
                 kind, tag_dir = "Goto", direction
-                sheet.goto(name, tag, at, LOCAL, tag_dir)
             else:
                 kind = "From"
                 tag_dir = {"right": "left", "left": "right", "down": "up", "up": "down"}[direction]
+            while (any(b[0] - 12 < at[0] < b[2] + 12 and b[1] - 10 < at[1] < b[3] + 10
+                       for b in router.boxes.values())
+                   or not _tag_text_clear(sheet, kind, tag, at, tag_dir)):
+                at = (at[0] + ux * 10, at[1] + uy * 10)
+            name = f"{tag}_{part}_{term}"
+            if kind == "Label":
+                sheet.label(name, tag, at, LOCAL, tag_dir)
+            elif kind == "Goto":
+                sheet.goto(name, tag, at, LOCAL, tag_dir)
+            else:
                 sheet.from_(name, tag, at, LOCAL, tag_dir)
             shp = geometry.shape(kind, at, tag_dir, False, {})
             router.add_obstacle(name, shp.box if shp.measured else (at[0] - 10, at[1] - 8, at[0] + 10, at[1] + 8))
@@ -433,72 +507,266 @@ class Netlist:
             else:
                 self._unrouted(sheet, n.kind, ends)
 
+    def _tag_signal_receivers(self, sheet, router, net, pins):
+        """Emit an explicit signal Goto at the driver and a From at every receiver."""
+        tag = net.tag
+        for index, (part, term, tp) in enumerate(pins):
+            driver = index == 0
+            esc = router._escape(part, tp)
+            (cx, cy), (ex, ey) = router._pt(esc[0]), router._pt(esc[-1])
+            ux, uy = (ex > cx) - (ex < cx), (ey > cy) - (ey < cy)
+            if (ux, uy) == (0, 0):
+                ux = 1 if driver else -1
+            at = (snap(ex + ux * TAG_GAP), snap(ey + uy * TAG_GAP))
+            direction = {(1, 0): "right", (-1, 0): "left", (0, 1): "down", (0, -1): "up"}[(ux, uy)]
+            if driver:
+                tag_kind, tag_direction = "Goto", direction
+            else:
+                tag_kind = "From"
+                tag_direction = {"right": "left", "left": "right", "down": "up", "up": "down"}[direction]
+            while (any(b[0] - 12 < at[0] < b[2] + 12 and b[1] - 10 < at[1] < b[3] + 10
+                       for b in router.boxes.values())
+                   or not _tag_text_clear(sheet, tag_kind, tag, at, tag_direction)):
+                at = (at[0] + ux * 10, at[1] + uy * 10)
+            name = f"{tag}_{part}_{term}"
+            if driver:
+                sheet.goto(name, tag, at, LOCAL, tag_direction)
+            else:
+                sheet.from_(name, tag, at, LOCAL, tag_direction)
+            shape = geometry.shape(tag_kind, at, tag_direction, False, {})
+            box = shape.box if shape.measured else (at[0] - 10, at[1] - 8, at[0] + 10, at[1] + 8)
+            router.add_obstacle(name, box)
+            tag_pin = (name, 1, geometry.terminal(shape, 1, at))
+            ends = [(part, term, tp), tag_pin] if driver else [tag_pin, (part, term, tp)]
+            route = router.route(ends)
+            if route.tree is not None:
+                sheet.connect_tree("Signal", ends[0][:2], route.tree)
+            else:
+                self._unrouted(sheet, "Signal", ends)
 
-def check_connectivity(text: str, nl: "Netlist") -> list[str]:
-    """Rebuild the nets from a written model and compare them with the netlist.
 
-    Wires and signals join their endpoints; electrical Labels with one tag, a Goto with its
-    Froms, and all Ground blocks are joined too. Returns a list of differences (empty = same).
+def check_connectivity(text: str, nl: "Netlist", sheet_path: str = "/") -> list[str]:
+    """Compare logical nets with one selected schematic, resolving local and global tags.
+
+    ``sheet_path`` names a nested Subsystem by component path, such as ``/Control``.
+    Local tag names are scoped to their containing schematic; Visibility "1" tags
+    share the model-wide scope. The legacy two-argument call still checks the root.
     """
     import plecs_file as pf
 
+    root = pf.parse(text)
+    root_schematic = pf.schematic(root)
+    if root_schematic is None:
+        return ["no Schematic block found"]
+
+    def normalize_path(path):
+        parts = [part for part in str(path).split("/") if part]
+        return "/" + "/".join(parts) if parts else "/"
+
+    selected_path = normalize_path(sheet_path)
+    sheets = {}
+
+    def collect(schematic, path):
+        sheets[path] = schematic
+        for component in schematic.children_of("Component"):
+            nested = component.child("Schematic")
+            if nested is not None:
+                name = component.get("Name") or "?"
+                child_path = normalize_path(path.rstrip("/") + "/" + name)
+                collect(nested, child_path)
+
+    collect(root_schematic, "/")
+    sch = sheets.get(selected_path)
+    if sch is None:
+        return [f"sheet path {selected_path} was not found"]
+    comps = {c.get("Name"): c for c in sch.children_of("Component")}
+    findings = []
+
+    def add(message):
+        if message not in findings:
+            findings.append(message)
+
+    def node(kind, pin):
+        path, name, terminal = pin
+        return kind, path, name, terminal
+
+    def show_pin(pin):
+        path, name, terminal = pin
+        return f"{name}:{terminal}" if path == selected_path else f"{path}:{name}:{terminal}"
+
     parent: dict = {}
 
-    def find(x):
-        parent.setdefault(x, x)
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
+    def find(value):
+        parent.setdefault(value, value)
+        if parent[value] != value:
+            parent[value] = find(parent[value])
+        return parent[value]
 
-    def union(a, b):
-        parent[find(a)] = find(b)
+    def union(kind, a, b):
+        parent[find(node(kind, a))] = find(node(kind, b))
 
-    sch = pf.schematic(pf.parse(text))
-    comps = {c.get("Name"): c for c in sch.children_of("Component")}
-
-    def ends(conn, out):
-        if conn.get("SrcComponent"):
-            out.append((conn.get("SrcComponent"), str(conn.get("SrcTerminal"))))
-        if conn.get("DstComponent"):
-            out.append((conn.get("DstComponent"), str(conn.get("DstTerminal"))))
-        for b in conn.children_of("Branch"):
-            ends(b, out)
+    def ends(connection, path, out=None, root_connection=True):
+        out = [] if out is None else out
+        if root_connection and connection.get("SrcComponent"):
+            out.append((path, connection.get("SrcComponent"), str(connection.get("SrcTerminal"))))
+        if connection.get("DstComponent"):
+            out.append((path, connection.get("DstComponent"), str(connection.get("DstTerminal"))))
+        for branch in connection.children_of("Branch"):
+            ends(branch, path, out, False)
         return out
 
-    problems = []
-    claimed: dict = {}
-    for k, conn in enumerate(sch.children_of("Connection")):
-        pts = ends(conn, [])
-        # PLECS takes one connection per terminal and ignores the others
-        taken = [p for p in pts if claimed.get(p, k) != k]
-        for p in taken:
-            problems.append(f"terminal {p[0]}:{p[1]} has more than one connection; PLECS ignores the extra one")
-        pts = [p for p in pts if p not in taken]
-        for p in pts:
-            claimed.setdefault(p, k)
-        for a in pts[1:]:
-            union(pts[0], a)
-    groups = defaultdict(list)
-    for name, c in comps.items():
-        kind = c.get("Type")
-        if kind in ("Label", "Goto", "From"):
-            groups[("tag", "Label" if kind == "Label" else "signal", c.param("Tag"))].append((name, "1"))
-        elif kind == "Ground":
-            groups[("ground",)].append((name, "1"))
-    for members in groups.values():
-        for m in members[1:]:
-            union(members[0], m)
+    expected_pins = set()
+    expected_drivers = set()
+    expected = []
+    for index, net in enumerate(nl.nets):
+        if net.kind not in ("Wire", "Signal"):
+            add(f"net {net.name} has unsupported kind {net.kind!r}")
+            continue
+        pins = [(selected_path, str(name), str(term)) for name, term in net.pins]
+        if not pins:
+            add(f"net {net.name} has no terminals")
+            continue
+        expected.append((index, net, pins))
+        if net.kind == "Signal":
+            expected_drivers.add(pins[0])
+        for pin in pins:
+            if pin in expected_pins and net.kind == "Signal":
+                add(f"signal terminal {show_pin(pin)} is assigned to more than one logical net")
+            expected_pins.add(pin)
 
-    roots = {}
-    for n in nl.nets:
-        pins = [(a, str(t)) for a, t in n.pins]
-        rs = {find(p) for p in pins}
-        if len(rs) > 1:
-            problems.append(f"net {n.name} is split into {len(rs)} parts")
-        roots.setdefault(find(pins[0]), []).append(n)
-    for r, nets in roots.items():
-        grounded = [n for n in nets if any(nl.parts[a].kind == "Ground" for a, _ in n.pins)]
-        if len(nets) > 1 and len(grounded) < len(nets):
-            problems.append("nets " + ", ".join(n.name for n in nets) + " are joined")
-    return problems
+    claimed: dict = {}
+    actual_kinds = defaultdict(set)
+    signal_sources = []
+    for connection_index, conn in enumerate(sch.children_of("Connection")):
+        kind = conn.get("Type")
+        if kind not in ("Wire", "Signal"):
+            add(f"connection {connection_index} has unsupported kind {kind!r}")
+            continue
+        pins = ends(conn, selected_path)
+        seen_in_tree = set()
+        for pin in pins:
+            actual_kinds[pin].add(kind)
+            if pin in seen_in_tree:
+                add(f"terminal {show_pin(pin)} is attached more than once in one connection")
+            seen_in_tree.add(pin)
+            if pin in claimed and claimed[pin] != connection_index:
+                add(f"terminal {show_pin(pin)} has more than one connection; PLECS ignores the extra one")
+            claimed.setdefault(pin, connection_index)
+            find(node(kind, pin))
+        if pins:
+            for pin in pins[1:]:
+                union(kind, pins[0], pin)
+        if kind == "Signal" and conn.get("SrcComponent"):
+            signal_sources.append((selected_path, conn.get("SrcComponent"), str(conn.get("SrcTerminal"))))
+
+    tag_groups = defaultdict(list)
+    for path, level in sheets.items():
+        for component in level.children_of("Component"):
+            kind = component.get("Type")
+            if kind not in ("Label", "Goto", "From"):
+                continue
+            name = component.get("Name")
+            tag = component.param("Tag")
+            visibility = component.param("Visibility")
+            if not tag:
+                if path == selected_path:
+                    add(f"tag block {name} has no tag name")
+                continue
+            if visibility == "2":
+                scope = path
+            elif visibility == "1":
+                scope = "<global>"
+            else:
+                scope = f"<unsupported:{visibility}>"
+                if path == selected_path:
+                    add(f"tag block {name} has unsupported Visibility {visibility!r}")
+            wire_kind = "Wire" if kind == "Label" else "Signal"
+            member = (kind, path, name)
+            tag_groups[(wire_kind, tag, scope)].append(member)
+
+    for (wire_kind, tag, scope), members in tag_groups.items():
+        terminals = [(path, name, "1") for _, path, name in members]
+        for terminal in terminals[1:]:
+            union(wire_kind, terminals[0], terminal)
+        if wire_kind != "Signal" or scope not in (selected_path, "<global>"):
+            continue
+        gotos = [name for kind, _, name in members if kind == "Goto"]
+        froms = [name for kind, _, name in members if kind == "From"]
+        if len(gotos) > 1:
+            add(f"tag {tag!r} in scope {scope} has duplicate signal drivers: {', '.join(gotos)}")
+        if froms and not gotos:
+            add(f"tag {tag!r} in scope {scope} has unresolved From blocks: {', '.join(froms)}")
+        if gotos and not froms:
+            add(f"tag {tag!r} in scope {scope} has a Goto but no receiver")
+
+    grounds = [(path, name, "1") for path, level in sheets.items()
+               for name, component in ((c.get("Name"), c) for c in level.children_of("Component"))
+               if component.get("Type") == "Ground"]
+    for ground in grounds[1:]:
+        union("Wire", grounds[0], ground)
+
+    for name, part in nl.parts.items():
+        component = comps.get(name)
+        if component is None:
+            add(f"component {name} is missing from the written model in {selected_path}")
+        elif component.get("Type") != part.kind:
+            add(f"component {name} has kind {component.get('Type')!r}; expected {part.kind!r}")
+
+    for net_index, net, pins in expected:
+        missing_components = [name for path, name, _ in pins if path == selected_path and name not in comps]
+        if missing_components:
+            continue
+        wrong_kind = [pin for pin in pins if actual_kinds.get(pin) and net.kind not in actual_kinds[pin]]
+        if wrong_kind:
+            actual = sorted(actual_kinds[wrong_kind[0]])
+            add(f"net {net.name} uses connection kind {', '.join(actual)}; expected {net.kind}")
+        roots = {find(node(net.kind, pin)) for pin in pins}
+        if len(roots) > 1:
+            add(f"net {net.name} is split into {len(roots)} parts")
+
+    roots_to_nets = defaultdict(set)
+    roots_to_drivers = defaultdict(set)
+    for net_index, net, pins in expected:
+        for pin in pins:
+            roots_to_nets[find(node(net.kind, pin))].add(net_index)
+        if net.kind == "Signal":
+            roots_to_drivers[find(node("Signal", pins[0]))].add(pins[0])
+
+    def joined_is_intended(indices):
+        nets = [nl.nets[index] for index in indices]
+        tagged = {(net.kind, net.tag) for net in nets if net.tag}
+        if len(tagged) == 1 and all(net.tag for net in nets):
+            return True
+        return all(
+            net.kind == "Wire" and any(nl.parts.get(name) and nl.parts[name].kind == "Ground" for name, _ in net.pins)
+            for net in nets
+        )
+
+    for indices in roots_to_nets.values():
+        if len(indices) > 1 and not joined_is_intended(indices):
+            names = sorted(nl.nets[index].name for index in indices)
+            add("nets " + ", ".join(names) + " are joined")
+    for drivers in roots_to_drivers.values():
+        if len(drivers) > 1:
+            add("signal net has multiple drivers: " + ", ".join(show_pin(pin) for pin in sorted(drivers)))
+
+    for source in signal_sources:
+        _, name, _ = source
+        component = comps.get(name)
+        if component is not None and component.get("Type") == "From":
+            continue
+        if component is not None and component.get("Type") in ("Goto", "Label", "Ground"):
+            add(f"signal source {show_pin(source)} is not a driving terminal")
+        elif source not in expected_drivers:
+            add(f"signal source {show_pin(source)} does not match a logical net driver")
+
+    helper_types = {"Goto", "From", "Label", "Ground"}
+    for kind, path, name, terminal in list(parent):
+        pin = (path, name, terminal)
+        if path != selected_path or pin in expected_pins:
+            continue
+        component = comps.get(name)
+        if component is not None and component.get("Type") in helper_types:
+            continue
+        add(f"unexpected terminal {show_pin(pin)} is connected as {kind}")
+    return findings

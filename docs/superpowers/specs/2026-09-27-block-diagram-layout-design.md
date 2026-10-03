@@ -1,6 +1,17 @@
 # Block-diagram layout for PLECS sheets made of C-Scripts and subsystems
 
-Date: 2026-09-27. Status: approved in conversation, awaiting written review.
+Date: 2026-09-27. Status: initial implementation complete; PLECS verification pending.
+
+Implementation boundary recorded 2026-10-02: `blockdiagram.layout()` and `score.score()` are
+implemented in the public skill repository with table-backed geometry, plain-text envelopes,
+connectivity comparison and an authored synthetic C-Script example. The electrical
+`Netlist.layout()` path remains separate. PLECS Standalone 4.9.8 loaded and simulated the example;
+its final unit-reference output was `1.0` within `1e-6` absolute tolerance. A GUI capture was not
+retained, so visual acceptance and text-estimate calibration remain unverified. Subsystem geometry
+now supports explicit `Frame` and ordered `Terminal Position` records for the verified
+`Direction up` / `Flipped off` form, based on PLECS's `enabled_subsystem.plecs` fixture; GUI
+capture and screen-scale calibration remain unverified. The separate power-stage milestone and
+Riello project retrofit are not part of this implementation.
 
 ## Goal
 
@@ -29,13 +40,17 @@ milestone-3 comparison against the stored baseline passes unchanged.
   they become tag pairs.
 - **One column per layer, blocks stacked top to bottom**, ordered by the barycentre of their
   neighbours in the previous column.
-- **Pitch from geometry.** Column x is set so that the widest block in the column, plus a tag
-  column on each side (tag 15 px + stub 20 px), plus a 40 px gap, fits before the next column.
-  Row pitch is the tallest block in the row plus 30 px.
-- **Fixed orientation.** C-Script and Subsystem at `Direction up` (inputs left, outputs right,
-  as measured); Scope, Output, Input, Display at `right`. No automatic rotation on these sheets.
+- **Pitch from occupied geometry.** Placement reserves measured bodies, displayed plain text and
+  every candidate tag envelope, including its 20 px stub, even when a net may later be a direct
+  wire. Columns and rows are separated by at least 40 px and 30 px. This leaves unused tag space
+  rather than running an iterative compaction pass.
+- **Fixed orientation.** C-Script at `Direction up`; Scope, Output, Input and Display at `right`.
+  Subsystems use explicit frame and terminal records for the verified `Direction up` /
+  `Flipped off` template form. Other Subsystem transforms remain unsupported. No automatic
+  rotation on supported controller sheets.
 - **Zones optional.** With zones, columns run zone by zone left to right; without, one zone.
-- **Hints.** `row`/`col` on a part override the automatic position.
+- **Hints.** `row`/`col` constrain automatic slots. Fixed `at` positions are preserved and rejected
+  when off-grid or inconsistent with row/column constraints.
 
 ## 2. Wire or tag
 
@@ -52,23 +67,31 @@ Every other connection is a tag pair:
   column reads like a pin list.
 - Tag name = net name from the netlist (`Vdc`, `i_abc`, `gate_S1`), never derived from block
   names. One Goto per net, any number of Froms.
-- Visibility `"2"` (this sheet) unless the net is declared as crossing into a subsystem, then `"1"`.
+- Visibility `"2"` by default. `Visibility "1"` is understood by the connectivity checker as
+  model-global, but `blockdiagram.layout()` lays out one sheet at a time and does not create
+  subsystem boundaries.
 - Mux and Demux are ordinary blocks with their own tags.
 - Unconnected terminals get nothing; the score reports unconnected inputs.
 
-The router is not used on these sheets. A wire that fails rule 2 or 3 becomes a tag pair.
+The maze router is not used on these sheets. A wire that fails a rule becomes Goto/From tags.
+Generated helper names are deterministic. Final lint, connectivity and routing findings remain in
+the report; a rejected report is not a completed layout, and the placer does not retry to hide a
+final conflict.
 
 ## 3. Terminal geometry
 
-- **C-Script rule** (from the calibration of PLECS 4.9): ports on a 10 px pitch, centred on the
-  edge; edge length `max(30, 10n + 10)` for n ports. At `Direction up`, input 1 is the topmost
-  on the left edge and output 1 the topmost on the right. A scalar `NumInputs` such as `"7"` is
-  one terminal of width 7; a vector such as `[1 1 1]` gives one terminal per entry.
-- **Verification:** the 23 C-Scripts in the Plexim demos. Terminal positions from the rule must
-  make the hand-drawn wire legs leave straight, the test that gave 96% on the calibration table.
-  A port count that fails is marked unmeasured and reported, not guessed.
-- **Subsystems** carry their frame and terminal positions in the `.plecs` file; read them.
-- Scope, Output, Input, Display, Mux, Goto, From, Probe are in the measured table already.
+- **C-Script variants are table-backed.** Scalar `NumInputs`/`NumOutputs` values select one port
+  regardless of signal width; literal vectors select one port per entry. Only calibrated variants
+  and orientations resolve. Expressions and uncalibrated counts are unmeasured. The proposed
+  general edge-length/10 px pitch formula is not used as a geometry fallback.
+- **Subsystems** use only explicit `Frame` and ordered `Terminal Position` records; nested
+  Schematic content is never used to guess geometry. The PLECS 4.9.8
+  `enabled_subsystem.plecs` fixture confirms the serialized frame and port records. The runtime
+  adapter currently accepts only `Direction up` and `Flipped off`; missing/malformed records and
+  other orientations remain unsupported. The retained GUI capture and screen-scale calibration
+  are separate visual-acceptance evidence and are still pending.
+- Scope, Output, Input, Display, Mux, Goto, From and other blocks resolve only for calibrated table
+  variants. `geometry.json` is the source of supported entries.
 - Blocks the calibration could not read (ThreePhaseMeter, ToFile, SignalSwitch) stay unmeasured
   and are reported.
 
@@ -78,32 +101,33 @@ The router is not used on these sheets. A wire that fails rule 2 or 3 becomes a 
 
 | Item | Weight |
 |---|---|
-| Lint errors: overlap, wire through block, wire over terminal, off-grid, component order | 100 |
+| Lint errors: overlap, wire through block or displayed text, wire over terminal, off-grid, component order | 100 |
 | Connectivity differences from the netlist: missing, joined or extra nets, two connections on one terminal | 100 |
-| Stub or wire not straight; tag not on its terminal's line | 10 |
+| Stub or wire not straight; tag not on its terminal's line; undeclared tag names | 10 |
 | Wire longer than `max_wire` | 10 |
+| Direct connections left untagged when `max_wire=0` | 10 |
 | Unconnected block input | 5 |
 | Crossing | 5 |
 
-The placer scores its own output and puts the result in its report next to the SVG preview.
-Tests assert score 0 for every generated model. Hand-drawn demo controller sheets are a sanity
-check: a high score on a demo means the score is wrong, not the demo.
+The placer scores its own output under `report["quality"]`. The result includes counts, weighted
+score, findings, coverage, connectivity, unrouted nets, crossings, bends, tag count, wire length,
+occupied area and optional displacement. `accepted` requires zero weighted score, complete
+supported geometry, equivalent connectivity and no unresolved routing or tags. Tests assert score
+0 for the accepted synthetic controller; faulty and unsupported layouts stay rejected.
 
 ## 5. Proof on Riello
 
-Retrofit `plant_trace.py` (milestone-3 unit tests) to build the same components through the
-block-diagram placer. Required: score 0 and a clean preview; PLECS simulates it; the
-milestone-3 comparison against the stored baseline passes unchanged. The retrofit stays in the
-Riello repository. The public skill repository gets a synthetic C-Script sheet with the same
-structure as example and test.
+The approved Riello retrofit remains a separate project task. This public repository contains an
+authored synthetic C-Script controller. Its integration test loads and simulates it when PLECS
+XML-RPC is running; a skipped integration test does not count as verification.
 
 ## Components
 
 | Unit | Responsibility | Depends on |
 |---|---|---|
-| `blockdiagram.py` (new, in `skills/plecs-layout/scripts`) | layers, grid, wire-or-tag decision, tag placement; returns a `Sheet` and a report with the score | `geometry`, `layout`, `lint_schematic`, `autolayout.check_connectivity` |
-| `geometry.py` | C-Script port rule; Subsystem terminals from the file | `geometry.json` |
-| `score.py` (new) | the score table above | `lint_schematic`, `autolayout.check_connectivity` |
+| `blockdiagram.py` (`skills/plecs-layout/scripts`) | deterministic layering, measured-envelope spacing, fixed orientations, straight-wire/tag decision and report | `geometry`, `layout`, `lint_schematic`, `autolayout.check_connectivity` |
+| `geometry.py` | variant lookup, C-Script variant parsing, explicit Subsystem frame/port adapter and text estimates | `geometry.json`; Subsystem records restricted to the verified up/off form |
+| `score.py` | weighted diagnostics and strict accepted status | `lint_schematic`, `autolayout.check_connectivity` |
 | `preview.py` | unchanged | |
 | `plecs-layout/SKILL.md` | tells an agent when to use the block-diagram placer and how to read the score | |
 
@@ -111,5 +135,7 @@ structure as example and test.
 
 - Unit: layering with feedback, wire-or-tag rules, tag placement on terminal lines, C-Script
   port rule against the demos, score on constructed faults.
-- Integration (skipped without PLECS): the synthetic C-Script sheet simulates and scores 0.
+- Integration (skipped without PLECS): a test loads the synthetic controller and compares its
+  final output to 1.0 with `1e-6` absolute tolerance. Unit tests or skipped integration tests do
+  not prove actual PLECS behavior.
 - Riello (local): milestone-3 fixture retrofit as in section 5.

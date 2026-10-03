@@ -65,6 +65,29 @@ def test_signal_chain_is_layered_left_to_right(fake_geometry):
     assert report["unmeasured"] == []
 
 
+def test_series_chains_keep_their_rows_across_zones(fake_geometry):
+    nl = autolayout.Netlist()
+    zones = ("source", "power", "measure")
+    for phase in ("A", "B"):
+        for stage, zone in enumerate(zones):
+            nl.part(f"{phase}{stage}", "Resistor", zone=zone)
+        for stage in range(len(zones) - 1):
+            nl.net(f"{phase}{stage}", "Wire", [(f"{phase}{stage}", 1), (f"{phase}{stage + 1}", 2)])
+        nl.part(f"{phase}src", "Gain", zone=zones[0])
+        nl.part(f"{phase}load", "Gain", zone=zones[-1])
+        nl.net(f"{phase}src-net", "Wire", [(f"{phase}0", 2), (f"{phase}src", 1)])
+        nl.net(f"{phase}load-net", "Wire", [(f"{phase}2", 1), (f"{phase}load", 1)])
+
+    nl.layout(zones=zones)
+
+    for phase in ("A", "B"):
+        ys = [nl.parts[f"{phase}{stage}"].pos[1] for stage in range(len(zones))]
+        assert len(set(ys)) == 1
+        xs = [nl.parts[f"{phase}{stage}"].pos[0] for stage in range(len(zones))]
+        assert xs == sorted(xs)
+    assert nl.parts["A0"].pos[1] != nl.parts["B0"].pos[1]
+
+
 def test_routed_output_is_orthogonal_and_parses(fake_geometry):
     sheet, _ = chain().layout(zones=["control", "output"])
     sch = plecs_file.schematic(plecs_file.parse(sheet.model("t")))
@@ -81,6 +104,25 @@ def test_forced_tag_uses_goto_and_from(fake_geometry):
     assert report["tagged"] == ["b"]
     text = sheet.schematic()
     assert "Type          Goto" in text and "Type          From" in text
+
+
+@pytest.mark.parametrize("zones", [("control", "control", "control"), ("control", "measure", "measure")])
+def test_forced_signal_tag_has_one_from_per_receiver(fake_geometry, zones):
+    nl = autolayout.Netlist()
+    for name, zone in zip(("Source", "R1", "R2"), zones):
+        nl.part(name, "Gain", zone=zone)
+    nl.net("feedback", "Signal", [("Source", 2), ("R1", 1), ("R2", 1)], tag="feedback")
+
+    sheet, report = nl.layout(zones=list(dict.fromkeys(zones)))
+    schematic = plecs_file.schematic(plecs_file.parse(sheet.model("t")))
+    tags = [component for component in schematic.children_of("Component")
+            if component.get("Type") in ("Goto", "From")]
+
+    assert [component.get("Type") for component in tags].count("Goto") == 1
+    assert [component.get("Type") for component in tags].count("From") == 2
+    assert {component.param("Tag") for component in tags} == {"feedback"}
+    assert report["connectivity"] == []
+    assert report["unrouted"] == []
 
 
 def test_two_terminal_part_turns_to_face_its_neighbours(fake_geometry):
@@ -102,8 +144,9 @@ def test_sources_are_vertical_and_ground_points_down_under_its_node():
     nl.part("Gnd", "Ground", zone="power")
     nl.net("in", "Wire", [("Vin", 1), ("R1", 1)])
     nl.net("gnd", "Wire", [("Vin", 2), ("R1", 2), ("Gnd", 1)])
-    sheet, _ = nl.layout(zones=["source", "power"])
+    sheet, report = nl.layout(zones=["source", "power"])
     vin, gnd = nl.parts["Vin"], nl.parts["Gnd"]
+    resistor = nl.parts["R1"]
     plus = geometry.shape("DCVoltageSource", vin.pos, vin.direction, vin.flipped).terminals["1"]
     minus = geometry.shape("DCVoltageSource", vin.pos, vin.direction, vin.flipped).terminals["2"]
     assert plus[0] == minus[0] and plus[1] < minus[1]            # vertical, + on top
@@ -112,7 +155,26 @@ def test_sources_are_vertical_and_ground_points_down_under_its_node():
     lowest = max(geometry.shape(p.kind, p.pos, p.direction, p.flipped).terminals[t][1]
                  for p, t in ((vin, "2"), (nl.parts["R1"], "2")))
     assert gnd.pos[1] > lowest                                    # below the node it grounds
+    resistor_terms = geometry.shape("Resistor", resistor.pos, resistor.direction, resistor.flipped).terminals
+    assert resistor_terms["1"][0] == resistor_terms["2"][0]
+    assert resistor_terms["1"][1] < resistor_terms["2"][1]       # shunt stands above its grounded pin
+    assert report["connectivity"] == []
     assert [f for f in sheet.lint() if f.severity == "error"] == []
+
+
+def test_electrical_tag_emits_one_label_per_zone(fake_geometry):
+    nl = autolayout.Netlist()
+    for name, zone in (("A1", "left"), ("A2", "left"), ("B1", "right"), ("B2", "right")):
+        nl.part(name, "Gain", zone=zone)
+    nl.net("dc", "Wire", [("A1", 1), ("A2", 2), ("B1", 1), ("B2", 2)], tag="bus")
+
+    sheet, report = nl.layout(zones=["left", "right"])
+    schematic = plecs_file.schematic(plecs_file.parse(sheet.model("t")))
+    labels = [component for component in schematic.children_of("Component") if component.get("Type") == "Label"]
+
+    assert report["tagged"] == ["dc"]
+    assert len(labels) == 2
+    assert {component.param("Tag") for component in labels} == {"bus"}
 
 
 def test_connectivity_check_finds_a_missing_wire():

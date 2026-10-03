@@ -1,6 +1,6 @@
 ---
 name: plecs-layout
-description: Use when generating, editing, or tidying a PLECS .plecs schematic that a person will open in the PLECS GUI — especially when wires cross, the topology is hard to see, long wires run across the sheet, or blocks join the wrong net when dragged. Covers placement, Goto/From signal tags, electrical Label tags, wire routing with Points, and a lint check.
+description: Use when generating, editing, or tidying a PLECS .plecs schematic that a person will open in the PLECS GUI. Covers separate electrical-circuit and controller-block layout paths, signal tags, electrical Labels, measured geometry, previews, connectivity checks and lint.
 license: MIT
 compatibility: Scripts need Python 3.10+ (standard library only). Loading or simulating the result needs PLECS 4.7 or later.
 metadata:
@@ -10,13 +10,63 @@ metadata:
 
 # PLECS schematic layout
 
-**Core principle:** draw a wire only where it shows topology. Every other connection is a tag. A schematic is finished when the linter reports no errors.
+**Core principle:** use the layout path that matches the sheet. Electrical circuits use the router and preserve circuit rails and grounded nodes. Controller block diagrams use measured terminals, short straight wires and signal tags for other connections. A clean lint report is one gate; connectivity, geometry coverage and routing must pass too.
 
-A connection without `Points` is left to PLECS routing, which ignores other blocks. A wire that runs over a terminal joins that net when someone drags the block. Tags have no geometry, so they cannot cross anything or join anything by accident.
+Signal tags occupy space: Goto/From symbols and displayed tag text can overlap blocks or other text. Electrical Labels also occupy space. A connection without `Points` is left to PLECS routing, which ignores other blocks, and moving a block onto a wire can join its net.
+
+## Controller block diagrams
+
+From the skill's `scripts` directory (or with that directory on `PYTHONPATH`), use
+`blockdiagram.layout(netlist, *, zones=None, max_wire=150, grid=5)` for a signal-flow
+diagram made from supported blocks such as C-Scripts, signal sources, Scope and Output blocks,
+plus Subsystem templates with explicit supported frame and terminal records.
+A signal net lists its driver first. Optional `row`/`col` hints and fixed `at` positions are
+preserved; fixed coordinates must lie on the 5 px grid. C-Scripts are oriented up; Scope, Input,
+Output and Display blocks are oriented right. Cycles remain in the logical netlist and use
+Goto/From tags for feedback.
+
+```python
+import blockdiagram
+from autolayout import Netlist
+
+netlist = Netlist()
+netlist.part("Reference", "Constant", {"Value": "1"}, zone="input")
+netlist.part("Controller", "Gain", {"K": "1"}, zone="control")
+netlist.part("Output", "Output", {"Index": "1"}, zone="output")
+netlist.net("reference", "Signal", [("Reference", 1), ("Controller", 1)])
+netlist.net("result", "Signal", [("Controller", 2), ("Output", 1)])
+
+sheet, report = blockdiagram.layout(
+    netlist, zones=["input", "control", "output"], max_wire=150)
+if not report["quality"]["accepted"]:
+    raise ValueError(report["quality"]["findings"])
+```
+
+`report["quality"]` separates weighted counts, findings, geometry coverage, connectivity,
+unrouted nets and metrics. `accepted` requires zero weighted score, supported geometry, equivalent
+connectivity and no unresolved routes or tags. Review the diagnostic preview, then load and
+simulate the generated sheet in PLECS. The synthetic command-line example writes a `.plecs` file
+and an SVG preview. From `skills/plecs-layout`, run:
+
+```powershell
+python scripts/example_blockdiagram.py --out controller.plecs
+```
+
+The controller path accepts only measured kind/variant/orientation combinations and plain,
+single-line displayed text. For a C-Script with code, pass its parsed `Component` as
+`component=` and matching parameters to `Netlist.part` so the function fields are preserved.
+C-Script parameter expressions are unsupported. For a Subsystem, pass an inspected parsed
+`Component` template to `Netlist.part`; geometry requires a valid `Frame` and ordered `Terminal
+Position` records, and currently supports only `Direction up` with `Flipped off`. Missing records
+and other orientations remain unsupported. Adjacent multiport terminals that need overlapping
+local tag symbols or labels raise `LayoutError` with `tag_spacing_conflict`; direct wires remain
+eligible. The text estimate uses 8 px per character,
+12 px line height, 2 px margin and 8 px clearance. It is a layout estimate, not a PLECS renderer.
+A rejected report must not be treated as a finished drawing.
 
 ## Procedure
 
-1. **Split the sheet into zones**, left to right, top to bottom. Use one `Zone` each in `scripts/layout.py`:
+1. **For electrical circuits, split the sheet into zones**, left to right, top to bottom. Use one `Zone` each in `scripts/layout.py`:
 
    | Zone | Holds |
    |------|-------|
@@ -40,8 +90,8 @@ A connection without `Points` is left to PLECS routing, which ignores other bloc
 | Rail shared by many densely packed parts (DC+, DC-, neutral) | electrical `Label` at each part |
 3. **Build the model with `scripts/layout.py`** (`Sheet`, `Zone`, `goto`, `from_`, `label`, `wire`, `signal`, `model`). Or write the text by hand under the same rules. The module docstring shows a complete example.
 4. **Route every wire.** Give `Points` to every connection whose two ends are not on one horizontal or vertical line. Consecutive `Points`, including a branch's first point after its junction, share x or y. Keep wires at least 15 px away from blocks that are not their own ends.
-5. **Preview:** run `python scripts/preview.py model.plecs` and look at the SVG (convert it to PNG if your viewer needs one). Dashed red legs are corners PLECS draws by itself; check them.
-6. **Lint:** run `python scripts/lint_schematic.py model.plecs`. Fix every error. For every `crossing` or `unrouted` warning, reroute or replace the run with a tag. Run the linter again.
+5. **Preview:** run `python scripts/preview.py model.plecs` and look at the SVG (convert it to PNG if your viewer needs one). Dashed red legs are inferred by the legacy preview; the strict controller path rejects non-straight connections.
+6. **Lint:** run `python scripts/lint_schematic.py model.plecs`. Fix every error. Review geometry and text coverage warnings; unsupported estimates cannot establish controller acceptance.
 7. **Simulate once in PLECS** (XML-RPC `plecs.load`, then `plecs.simulate`, then `plecs.close`). Loading alone does not catch missing wires. The simulation's topology check does, and it names overlapping, unconnected terminals.
 
 ## Drawing conventions
@@ -60,7 +110,7 @@ Terminal positions for every orientation are in `scripts/geometry.json`, measure
 | Parameter | Rule |
 |-----------|------|
 | `Visibility "2"` | This schematic only. Use by default. |
-| `Visibility "1"` | Global: the whole model. Only for tags that must cross into a subsystem. Make the name unique across the model. |
+| `Visibility "1"` | Global: the whole model. Use only for tags that must cross sheet boundaries. Make the name unique across the model. |
 | `Tag` | Short engineering name: `Vdc`, `Idc`, `ia`, `ib`, `ic`, `is_abc`, `gate_S1`, `m_a`, `Vdc_ref`. Never `Signal1`. |
 | One Goto per tag per scope | Any number of Froms. |
 | Electrical `Label` | Same tag in two or more places joins the nodes. A single Label is an error. |
@@ -80,4 +130,9 @@ Block keywords: `Goto`, `From`, `Label` (electrical), `PlecsProbe` (reads a comp
 
 ## Limits
 
-`.plecs` files do not store terminal offsets. The linter uses the block centre as its terminal, and treats the leg between a terminal and the nearest Point as bent by PLECS. So it only flags diagonals between two explicit Points. Keep blocks in rows and columns and this gap does not matter. See `references/conventions.md` for the measured conventions and their sources.
+PLECS files do not store built-in terminal offsets. The geometry table has measured entries for
+specific variants and orientations; the generic electrical path can show a marked fallback for
+unknown entries, while the controller path rejects them. The legacy linter recognizes
+PLECS-inferred bends in existing electrical models. Controller acceptance requires measured
+terminals, supported rendered text, no lint errors and equivalent connectivity. See
+`references/conventions.md` for geometry and text assumptions.

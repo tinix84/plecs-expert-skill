@@ -42,6 +42,56 @@ maintainer/        docs-sync tools, PLECS geometry calibration
 tests/             unit tests; PLECS integration tests run when PLECS is up on localhost:1080
 ```
 
+## Layout modes
+
+`plecs-layout` has two explicit paths. Use the existing electrical `Netlist.layout()` for
+power circuits, where the router preserves rails, Ground splitting and electrical Labels. Use
+`blockdiagram.layout()` for a controller sheet made from measured signal blocks, where short
+clear straight wires stay as wires and other signal connections use Goto/From tags.
+
+Generate the synthetic controller and its diagnostic SVG with:
+
+```powershell
+python skills/plecs-layout/scripts/example_blockdiagram.py --out controller.plecs
+```
+
+For an authored model, run from `skills/plecs-layout/scripts` (or put that directory on
+`PYTHONPATH`), build the existing `Netlist`, add signal nets with the driver first, then call
+the controller path:
+
+```python
+import blockdiagram
+from autolayout import Netlist
+
+netlist = Netlist()
+netlist.part("Reference", "Constant", {"Value": "1"}, zone="input")
+netlist.part("Controller", "Gain", {"K": "1"}, zone="control")
+netlist.part("Output", "Output", {"Index": "1"}, zone="output")
+netlist.net("reference", "Signal", [("Reference", 1), ("Controller", 1)])
+netlist.net("result", "Signal", [("Controller", 2), ("Output", 1)])
+
+sheet, report = blockdiagram.layout(
+    netlist, zones=["input", "control", "output"], max_wire=150)
+if not report["quality"]["accepted"]:
+    raise ValueError(report["quality"]["findings"])
+```
+
+The controller path accepts only grid 5, resolves geometry from measured variants or explicit
+parsed component records, and rejects unknown geometry or port roles. It reports lint,
+connectivity, routing, coverage and drawing metrics separately. C-Script parameters must resolve
+to a calibrated variant; parameter expressions are unsupported. A Subsystem template must carry
+valid `Frame` and ordered `Terminal Position` records and currently must use `Direction up` and
+`Flipped off`; pass the parsed `Component` as `component=` to `Netlist.part` so the interface and
+nested sheet are preserved. Missing fields and other Subsystem orientations remain unsupported.
+Adjacent multiport terminals that need overlapping local tags raise `LayoutError` with
+`tag_spacing_conflict`; direct wires remain eligible. To lay out a C-Script that carries code,
+pass its parsed `Component` as `component=` and matching parameters to `Netlist.part`; this
+preserves its function fields. `accepted` also requires no
+estimated text collisions or unresolved routing. Text estimates assume plain single-line text
+at 8 px per character and 12 px line height; inspect the exported `.plecs` drawing in PLECS
+before relying on it. The integration test simulates the synthetic controller when PLECS XML-RPC
+is available at `localhost:1080`.
+
 ## Development
 
 ```

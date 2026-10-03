@@ -17,11 +17,13 @@ from __future__ import annotations
 
 import json
 import sys
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lint_schematic  # noqa: E402
+import plecs_file as pf  # noqa: E402
 
 LOCAL, GLOBAL = "2", "1"  # Goto/From/Label Visibility values
 
@@ -58,6 +60,14 @@ def vh(a, b):
     return [(a[0], b[1])]
 
 
+def _set_field(block, key, value):
+    for index, item in enumerate(block.items):
+        if isinstance(item, tuple) and item[0] == key:
+            block.items[index] = (key, value)
+            return
+    block.items.append((key, value))
+
+
 class Sheet:
     def __init__(self, grid: int = 5):
         self.grid = grid
@@ -81,18 +91,43 @@ class Sheet:
             f"  LabelPosition {label}",
         ]
         for var, val in (params or {}).items():
+            if var.startswith("@"):
+                body.append(f"  {var[1:]:<13} {json.dumps(str(val))}")
+                continue
             body += ["  Parameter {", f"    Variable      {json.dumps(var)}",
                      f"    Value         {json.dumps(str(val))}", "    Show          off", "  }"]
         self._comps.append("\n".join(body + ["}"]))
         return name
 
-    def goto(self, name, tag, at, visibility=LOCAL, direction="right"):
-        return self.add("Goto", name, at, direction, params={"Tag": tag, "Visibility": visibility},
-                        label="south", show_name=False)
+    def add_component(self, component: pf.Block, *, at=None, direction=None, flipped=None) -> str:
+        """Copy a parsed Component, changing only its requested layout fields."""
+        if component.kind != "Component":
+            raise ValueError("add_component requires a parsed Component block")
+        name = component.get("Name")
+        if not name or not component.get("Type"):
+            raise ValueError("component template must have a Name and Type")
+        if name in self.names:
+            raise ValueError(f"duplicate component name {name!r}")
 
-    def from_(self, name, tag, at, visibility=LOCAL, direction="right"):
+        copied = deepcopy(component)
+        if at is not None:
+            x, y = self._pt(at)
+            _set_field(copied, "Position", f"[{x}, {y}]")
+        if direction is not None:
+            _set_field(copied, "Direction", str(direction))
+        if flipped is not None:
+            _set_field(copied, "Flipped", "on" if flipped else "off")
+        self.names.add(name)
+        self._comps.append(pf.dump(copied).rstrip())
+        return name
+
+    def goto(self, name, tag, at, visibility=LOCAL, direction="right", label="south"):
+        return self.add("Goto", name, at, direction, params={"Tag": tag, "Visibility": visibility},
+                        label=label, show_name=False)
+
+    def from_(self, name, tag, at, visibility=LOCAL, direction="right", label="south"):
         return self.add("From", name, at, direction, params={"Tag": tag, "Visibility": visibility},
-                        label="south", show_name=False)
+                        label=label, show_name=False)
 
     def label(self, name, tag, at, visibility=LOCAL, direction="right"):
         """Electrical Label: joins electrical nets that carry the same tag."""

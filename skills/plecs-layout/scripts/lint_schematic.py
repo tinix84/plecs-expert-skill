@@ -26,8 +26,6 @@ import plecs_file as pf  # noqa: E402
 TAG_BLOCKS = {"Goto", "From", "Label"}
 # Visibility parameter value that means "this schematic only"; other values search wider.
 LOCAL_VISIBILITY = "2"
-OVERLAP_PX = 15        # centres closer than this on both axes overlap (parts stack at 20 px in the demos)
-SMALL_OVERLAP_PX = 10  # tag, constant and probe blocks stack at 15 px
 SMALL = {"Goto", "From", "Label", "Constant", "Input", "Output", "PlecsProbe", "Ground"}
 # Blocks drawn around other blocks on purpose.
 CONTAINERS = {"HeatSink", "Annotation"}
@@ -46,11 +44,54 @@ class Finding:
 
 
 def _shape(c):
-    params = {p.get("Variable"): p.get("Value") for p in c.children_of("Parameter")}
-    if c.get("Axes"):
-        params["@Axes"] = c.get("Axes")
-    return geometry.shape(c.get("Type"), c.position, c.get("Direction") or "right",
-                          c.get("Flipped") == "on", params)
+    return geometry.component_shape(c)
+
+
+def text_envelopes(c, shape=None):
+    """Return supported displayed text rectangles and text-coverage limitations."""
+    shape = shape or _shape(c)
+    if c.position is None:
+        return [], []
+    x0, y0, x1, y1 = shape.box
+    cx = (x0 + x1) / 2
+    pitch = geometry.TEXT_HEIGHT + geometry.TEXT_GAP
+    records, limitations = [], []
+
+    def add(kind, text, side, line=0):
+        if text is None or text == "":
+            return
+        if not geometry.supports_plain_text(text):
+            limitations.append(f"{kind} text {text!r} is multiline or uses unsupported formatting")
+            return
+        if side == "north":
+            center = (cx, y0 - geometry.TEXT_GAP - geometry.TEXT_HEIGHT / 2 - line * pitch)
+        elif side == "south":
+            center = (cx, y1 + geometry.TEXT_GAP + geometry.TEXT_HEIGHT / 2 + line * pitch)
+        elif side == "east":
+            sample = geometry.estimate_text_box(text, (0, 0))
+            half_width = (sample[2] - sample[0]) / 2
+            center = (x1 + geometry.TEXT_GAP + half_width,
+                      (y0 + y1) / 2 + line * pitch)
+        elif side == "west":
+            sample = geometry.estimate_text_box(text, (0, 0))
+            half_width = (sample[2] - sample[0]) / 2
+            center = (x0 - geometry.TEXT_GAP - half_width,
+                      (y0 + y1) / 2 + line * pitch)
+        else:
+            limitations.append(f"{kind} text has unsupported LabelPosition {side!r}")
+            return
+        records.append({"component": c.get("Name"), "kind": kind, "text": text,
+                        "center": center, "box": geometry.estimate_text_box(text, center)})
+
+    label_side = c.get("LabelPosition") or "north"
+    if c.get("Show") == "on":
+        add("name", c.get("Name"), label_side)
+    if c.get("Type") in TAG_BLOCKS:
+        add("tag", c.param("Tag"), label_side)
+    shown_parameters = [p.get("Value") for p in c.children_of("Parameter") if p.get("Show") == "on"]
+    for index, value in enumerate(shown_parameters):
+        add("parameter", value, "south", index)
+    return records, limitations
 
 
 def _terminal_point(comps, name, term):
@@ -117,13 +158,32 @@ def _seg_hits_box(a, b, c, half) -> bool:
 
 
 def _seg_hits_rect(a, b, r) -> bool:
-    """Axis-aligned segment a-b passes through the open rectangle r = (x0, y0, x1, y1)."""
+    """Segment a-b passes through the open rectangle r = (x0, y0, x1, y1)."""
     (x1, y1), (x2, y2) = a, b
     if y1 == y2:
         return r[1] < y1 < r[3] and min(x1, x2) < r[2] and max(x1, x2) > r[0]
     if x1 == x2:
         return r[0] < x1 < r[2] and min(y1, y2) < r[3] and max(y1, y2) > r[1]
-    return False
+    low, high = 0.0, 1.0
+    for start, delta, lower, upper in (
+        (x1, x2 - x1, r[0], r[2]),
+        (y1, y2 - y1, r[1], r[3]),
+    ):
+        if delta == 0:
+            if not lower < start < upper:
+                return False
+            continue
+        enter, leave = (lower - start) / delta, (upper - start) / delta
+        low = max(low, min(enter, leave))
+        high = min(high, max(enter, leave))
+        if low >= high:
+            return False
+    return low < high
+
+
+def _rects_overlap(a, b) -> bool:
+    """Whether two open axis-aligned body rectangles have positive-area overlap."""
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
 
 def _on_segment(a, b, p) -> bool:
@@ -171,16 +231,35 @@ def _lint_level(sch, path, grid, tags) -> list:
         if sub is not None:
             out += _lint_level(sub, f"{path.rstrip('/')}/{name}", grid, tags)
 
+    shapes = {n: _shape(c) for n, c in comps.items() if c.position}
     names = [n for n in comps if comps[n].position and comps[n].get("Type") not in CONTAINERS]
     for i, a in enumerate(names):
-        pa = comps[a].position
         for b in names[i + 1:]:
-            pb = comps[b].position
-            lim = SMALL_OVERLAP_PX if SMALL & {comps[a].get("Type"), comps[b].get("Type")} else OVERLAP_PX
-            if abs(pa[0] - pb[0]) < lim and abs(pa[1] - pb[1]) < lim:
+            if _rects_overlap(shapes[a].box, shapes[b].box):
                 out.append(Finding("overlap", "error", path, f"{a} / {b}", f"components {a} and {b} overlap"))
 
-    shapes = {n: _shape(c) for n, c in comps.items() if c.position}
+    text_records = []
+    for name, c in comps.items():
+        if not c.position:
+            continue
+        records, limitations = text_envelopes(c, shapes[name])
+        text_records.extend(records)
+        for limitation in limitations:
+            out.append(Finding("text-coverage", "warn", path, name, limitation))
+    for index, item in enumerate(text_records):
+        for name, shp in shapes.items():
+            if name == item["component"] or comps[name].get("Type") in CONTAINERS:
+                continue
+            if _rects_overlap(item["box"], shp.box):
+                out.append(Finding("text-overlap", "error", path,
+                                   f"{item['component']}:{item['kind']} / {name}:body",
+                                   f"{item['kind']} text for {item['component']} overlaps component {name}"))
+        for other in text_records[index + 1:]:
+            if item["component"] != other["component"] and _rects_overlap(item["box"], other["box"]):
+                out.append(Finding("text-overlap", "error", path,
+                                   f"{item['component']}:{item['kind']} / {other['component']}:{other['kind']}",
+                                   f"displayed text overlaps between {item['component']} and {other['component']}"))
+
     # PLECS uses one connection per terminal; further wires must branch from that connection
     seen_terms: dict = {}
     for k, conn in enumerate(sch.children_of("Connection")):
@@ -197,10 +276,19 @@ def _lint_level(sch, path, grid, tags) -> list:
             if p[0] % grid or p[1] % grid:
                 out.append(Finding("grid", "error", path, label, f"point {p} is off the {grid} px grid"))
         mine = _endpoints(conn)
+        reported_text = set()
         diagonal = False
         for (a, oa), (b, ob) in _segments(conn, comps):
             if a == b:
                 continue
+            for item in text_records:
+                identity = (item["component"], item["kind"])
+                if (item["component"] not in mine and identity not in reported_text
+                        and _seg_hits_rect(a, b, item["box"])):
+                    out.append(Finding("wire-through-text", "error", path, label,
+                                       f"wire overlaps displayed {item['kind']} text for "
+                                       f"{item['component']}"))
+                    reported_text.add(identity)
             if a[0] != b[0] and a[1] != b[1]:
                 # PLECS adds the corner itself on a leg that ends at a terminal, so only a
                 # segment between two explicit Points is a real diagonal.

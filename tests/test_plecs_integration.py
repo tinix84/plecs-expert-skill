@@ -9,6 +9,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills/plecs-layout/scripts"))
 from autolayout import Netlist  # noqa: E402
 from layout import GLOBAL, LOCAL, Sheet, Zone  # noqa: E402
+from example_blockdiagram import controller as blockdiagram_controller  # noqa: E402
+from example_blockdiagram import multiport_controller as blockdiagram_multiport_controller  # noqa: E402
 
 URL = "http://localhost:1080/RPC2"
 
@@ -53,9 +55,9 @@ def rc_with_tags(visibility_goto=LOCAL, visibility_from=LOCAL):
     return sh
 
 
-def _simulate(rpc, sh, name, tmp_path):
+def _simulate(rpc, sh, name, tmp_path, *, outputs=1, time_span="0.05"):
     path = tmp_path / f"{name}.plecs"
-    path.write_text(sh.model(name, time_span="0.05", outputs=1), encoding="utf-8")
+    path.write_text(sh.model(name, time_span=time_span, outputs=outputs), encoding="utf-8")
     try:
         rpc.plecs.close(name)
     except xmlrpc.client.Fault:
@@ -108,3 +110,23 @@ def test_autolayout_draws_a_clean_model_that_simulates(tmp_path):
     assert errors == [], errors
     result = _simulate(rpc, sheet, "it_autolayout", tmp_path)
     assert result["Values"][0][-1] == pytest.approx(1.0, abs=1e-6)
+
+
+def test_blockdiagram_controller_loads_and_simulates(tmp_path):
+    rpc = _rpc()
+    sheet, report = blockdiagram_controller()
+    assert report["quality"]["accepted"]
+
+    result = _simulate(rpc, sheet, "it_blockdiagram_controller", tmp_path)
+    assert result["Values"][0][-1] == pytest.approx(1.0, abs=1e-6)
+
+
+def test_blockdiagram_multiport_controller_preserves_channel_values(tmp_path):
+    rpc = _rpc()
+    sheet, report = blockdiagram_multiport_controller()
+    assert report["quality"]["accepted"]
+
+    result = _simulate(rpc, sheet, "it_blockdiagram_multiport_controller", tmp_path, outputs=2)
+    assert len(result["Values"]) == 2
+    assert result["Values"][0][-1] == pytest.approx(1.0, abs=1e-6)
+    assert result["Values"][1][-1] == pytest.approx(2.0, abs=1e-6)

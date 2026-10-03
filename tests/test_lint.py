@@ -3,16 +3,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills/plecs-layout/scripts"))
 import lint_schematic as lint  # noqa: E402
+import geometry  # noqa: E402
 
 
-def comp(kind, name, pos, params=None, direction="right"):
+def comp(kind, name, pos, params=None, direction="right", show="on", show_params=False):
     ps = "".join(
-        f'      Parameter {{\n        Variable      "{k}"\n        Value         "{v}"\n        Show          off\n      }}\n'
+        f'      Parameter {{\n        Variable      "{k}"\n        Value         "{v}"\n'
+        f'        Show          {"on" if show_params else "off"}\n      }}\n'
         for k, v in (params or {}).items()
     )
     return (
         f"    Component {{\n      Type          {kind}\n      Name          \"{name}\"\n"
-        f"      Show          on\n      Position      [{pos[0]}, {pos[1]}]\n"
+        f"      Show          {show}\n      Position      [{pos[0]}, {pos[1]}]\n"
         f"      Direction     {direction}\n      Flipped       off\n{ps}    }}\n"
     )
 
@@ -74,9 +76,71 @@ def test_duplicate_goto_tag():
     assert codes(text) == ["tag-duplicate-goto"]
 
 
-def test_overlapping_components():
-    text = model(comp("Gain", "A", (100, 100)), comp("Gain", "B", (110, 100)))
+def test_overlapping_components_use_measured_boxes():
+    text = model(comp("Gain", "A", (100, 100)), comp("Gain", "B", (120, 100)))
     assert "overlap" in codes(text)
+
+
+def test_rotated_measured_boxes_overlap(monkeypatch):
+    monkeypatch.setattr(geometry, "_TABLE", {
+        "Asymmetric": {"": {
+            "up/off": {"box": [-5, -30, 5, 30], "terminals": {"1": [0, -30], "2": [0, 30]}},
+            "right/off": {"box": [-30, -5, 30, 5], "terminals": {"1": [-30, 0], "2": [30, 0]}},
+        }}
+    })
+    text = model(comp("Asymmetric", "Tall", (100, 100), direction="up"),
+                 comp("Asymmetric", "Wide", (120, 120), direction="right"))
+
+    assert "overlap" in codes(text)
+
+
+def test_touching_measured_box_edges_are_not_overlap(monkeypatch):
+    monkeypatch.setattr(geometry, "_TABLE", {
+        "Box": {"": {"right/off": {"box": [-5, -5, 5, 5], "terminals": {}}}}
+    })
+    text = model(comp("Box", "A", (100, 100)), comp("Box", "B", (110, 100)))
+
+    assert "overlap" not in codes(text)
+
+
+def test_long_displayed_names_collide_even_when_bodies_do_not():
+    text = model(comp("Gain", "Controller long name A", (100, 100)),
+                 comp("Gain", "Controller long name B", (250, 100)))
+
+    assert "text-overlap" in codes(text)
+    assert "overlap" not in codes(text)
+
+
+def test_wire_crossing_displayed_text_is_reported():
+    parts = [comp("Constant", "Source", (100, 100), show="off"),
+             comp("Output", "Sink", (400, 100), show="off"),
+             comp("Constant", "Foreign label", (250, 130))]
+    component_model = model(*parts)
+    schematic = lint.pf.schematic(lint.pf.parse(component_model))
+    foreign = next(c for c in schematic.children_of("Component")
+                   if c.get("Name") == "Foreign label")
+    record = lint.text_envelopes(foreign)[0][0]
+    x0, _, x1, _ = record["box"]
+    y = record["center"][1]
+    wire = conn("Source", 1, "Sink", 1, points=[(x0 - 10, y), (x1 + 10, y)])
+
+    findings = lint.lint_text(model(*parts, wire))
+
+    assert any(f.code == "wire-through-text" and "Foreign label" in f.message
+               for f in findings)
+
+
+def test_hidden_component_names_do_not_reserve_text_space():
+    text = model(comp("Gain", "Controller long name A", (100, 100), show="off"),
+                 comp("Gain", "Controller long name B", (250, 100), show="off"))
+
+    assert "text-overlap" not in codes(text)
+
+
+def test_unsupported_shown_parameter_text_is_reported():
+    text = model(comp("Gain", "A", (100, 100), {"K": "{controller_value}"}, show_params=True))
+
+    assert "text-coverage" in codes(text)
 
 
 def test_long_connection_without_points_is_unrouted():
@@ -93,6 +157,13 @@ def test_terminal_leg_may_bend_implicitly():
 def test_wire_through_foreign_component():
     text = model(comp("Gain", "A", (100, 100)), comp("Gain", "B", (300, 100)), comp("Gain", "C", (200, 100)),
                  conn("A", 2, "B", 1, points=[(150, 100), (250, 100)]))
+    assert "wire-through-component" in codes(text)
+
+
+def test_terminal_to_point_leg_avoids_foreign_component():
+    text = model(comp("Gain", "A", (100, 100)), comp("Gain", "B", (300, 100)),
+                 comp("Gain", "C", (150, 100)), conn("A", 2, "B", 1, points=[(180, 100)]))
+
     assert "wire-through-component" in codes(text)
 
 

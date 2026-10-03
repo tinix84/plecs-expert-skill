@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lint_schematic as L  # noqa: E402
+import geometry  # noqa: E402
 import plecs_file as pf  # noqa: E402
 
 PAD = 40
@@ -33,7 +34,7 @@ def level(root, path):
 def render(sch) -> str:
     comps = {c.get("Name"): c for c in sch.children_of("Component") if c.position}
     shapes = {n: L._shape(c) for n, c in comps.items()}
-    items, xs, ys = [], [], []
+    items, xs, ys, text_records, text_limitations = [], [], [], [], []
 
     for n, c in comps.items():
         s = shapes[n]
@@ -42,7 +43,9 @@ def render(sch) -> str:
         ys += [y0, y1]
         dash = "" if s.measured else ' stroke-dasharray="3,2"'
         items.append(f'<rect x="{x0}" y="{y0}" width="{x1 - x0}" height="{y1 - y0}" fill="#e8e8e8" stroke="#888"{dash}/>')
-        items.append(f'<text x="{(x0 + x1) / 2}" y="{y0 - 3}" font-size="7" text-anchor="middle">{escape(n)}</text>')
+        records, limitations = L.text_envelopes(c, s)
+        text_records.extend(records)
+        text_limitations.extend((n, text) for text in limitations)
         for t, (tx, ty) in s.terminals.items():
             items.append(f'<circle cx="{tx}" cy="{ty}" r="2" fill="white" stroke="#c00"/>')
             items.append(f'<text x="{tx + 3}" y="{ty - 3}" font-size="5" fill="#c00">{escape(t)}</text>')
@@ -57,6 +60,22 @@ def render(sch) -> str:
             else:
                 style = f'stroke="{color}"'
             items.append(f'<line x1="{a[0]}" y1="{a[1]}" x2="{b[0]}" y2="{b[1]}" {style} stroke-width="1"/>')
+
+    for record in text_records:
+        x0, y0, x1, y1 = record["box"]
+        cx, cy = record["center"]
+        xs += [x0, x1]
+        ys += [y0, y1]
+        items.append(f'<rect x="{x0}" y="{y0}" width="{x1 - x0}" height="{y1 - y0}" '
+                     'fill="none" stroke="#d80" stroke-dasharray="3,2"/>')
+        items.append(f'<text x="{cx}" y="{cy}" font-size="{geometry.TEXT_HEIGHT}" '
+                     'text-anchor="middle" dominant-baseline="central" fill="#730">'
+                     f'{escape(record["text"])}</text>')
+    for name, limitation in text_limitations:
+        shp = shapes[name]
+        x, y = (shp.box[0] + shp.box[2]) / 2, shp.box[1] - 10
+        items.append(f'<text x="{x}" y="{y}" font-size="10" text-anchor="middle" fill="#c00">'
+                     f'{escape(name)}: {escape(limitation)}</text>')
 
     if not xs:
         xs, ys = [0, 100], [0, 100]
