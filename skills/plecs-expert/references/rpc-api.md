@@ -130,3 +130,16 @@ _Source: https://docs.plexim.com/plecs/latest/scripting/_
 - pyplecs targets the simulation path. Steady-state and small-signal analysis are not wrapped — call via `plecs_rpc('plecs.analyze', mdl, name, opts)`.
 - `MatFile` mode returns binary; `simulate_raw` covers it. `Plain` returns dict; `simulate` covers it.
 - Variable overrides via `ModelVars` apply after init commands and before component param evaluation.
+
+## Field notes: getting usable results out of `plecs.simulate` (PLECS 4.9, 2026-10-30)
+
+- `OutputTimes` must sit inside `SolverOpts`: `plecs.simulate(name, {ModelVars: {...}, SolverOpts: {OutputTimes: [...]}})`. As a top-level key it is silently ignored and every solver step comes back (hundreds of MB of XML for 0.4 s of a switched model).
+- All `OutputTimes` must lie in `[StartTime, TimeSpan]`; build them as `t0 + k*dt`, clamp the last one (accumulating `t += dt` overshoots).
+- `ModelVars` accepts vectors (XML-RPC arrays), e.g. a measured input profile of 200k samples. Model reads it in a C-Script via `ParamRealData`.
+- Fault string for a C-Script compile error only says "Error(s) during compilation in component ..."; no compiler message. Bisect: temp copies of the model with code variants, load + simulate each.
+- Output grid vs switching (fixed-grid results of a switched model):
+  - Coarse grid (e.g. 5 us at 80 kHz) aliases the switching ripple into the baseband.
+  - Grid that is a fraction of Tsw (Tsw/20) locks to the carrier: averages of chopped currents jump whenever a switching edge passes a sample instant.
+  - Chopped quantities (switch / DC-side currents) are worst: one sample flips by the full current. Use >= 50 samples per Tsw, or a grid that is not a fraction of Tsw, or average per switching period inside the model.
+  - Comparing with an old export: same input profile, same time instants, same filter. The old export carries the same artefact with an unknown carrier phase; compare on a fine grid (e.g. 8 sub-phases per original sample) before calling a difference real.
+- Visual check of a loaded model: capture the model window with Win32 `PrintWindow` (`tools/shot_window.ps1`). `plecs.load` opens the window in PLECS Standalone.

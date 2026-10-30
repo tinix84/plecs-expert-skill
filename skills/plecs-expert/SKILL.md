@@ -25,6 +25,7 @@ Lookup-first PLECS reference grounded in docs.plexim.com. Two layers:
 | Subsystems & masks | `references/components/system.md` |
 | XML-RPC API | `references/rpc-api.md` |
 | `.plecs` XML grammar | `references/plecs-xml-grammar.md` |
+| Readable schematic layout, writing wires/branches, layout checklist | `references/schematic-layout.md` |
 | Solver | `references/solver.md` |
 | Codegen (PLECS Coder) | `references/codegen.md` |
 | C-Script block | `references/cscript.md` |
