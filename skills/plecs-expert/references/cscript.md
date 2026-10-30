@@ -52,3 +52,10 @@ _Source: https://docs.plexim.com/plecs/latest/c-scripts/_
 - `SetErrorMessage` aborts at end of step. Pair with `return` to skip the rest of the step.
 - Error / warning string pointers must point to static memory. Don't pass stack buffers.
 - For non-trivial logic prefer C-Script over masking-Lua: faster, debugger-friendly, type-checked.
+
+## Field notes (PLECS 4.9, 2026-10-30)
+
+- No `ParamNumElements` macro (compile error). Vector length: `ParamDim(i,0)*ParamDim(i,1)`, or pass `length(x)` as an extra parameter in the Parameters field and read it with `ParamRealData`.
+- `M_PI` not defined in the C-Script compiler setup. Use the literal `3.141592653589793`.
+- Number of inputs must be >= 1 ("Input width must be positive"). Source-type scripts: feed a `Constant` 0.
+- Discrete controller copy of DSP firmware: sample time `1/(2*fsw)` for up-down carrier with sampling at zero and period; results used one sample later = put the "ISR" computation in the update function and the duty in the output function.

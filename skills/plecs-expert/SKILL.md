@@ -19,6 +19,7 @@ Entry point for the PLECS skill family. Pick the sibling skill for the task, the
 | Read or write `.plecs` file text: blocks, keys, `Component`, `Connection`, `Points`, `Branch` | `plecs-grammar` |
 | Component parameters, terminals, probes (R, L, C, sources, switches, meters, control, thermal, magnetic, subsystems) | `plecs-components` |
 | Generate or tidy a schematic so it is readable: placement, Goto/From tags, electrical labels, wire routing, lint | `plecs-layout` |
+| Handwritten wire branches and power-circuit drawing checklist | `references/schematic-layout.md` |
 | Solver settings and tolerances | `references/solver.md` |
 | C-Script block | `references/cscript.md` |
 | XML-RPC scripting (`plecs.simulate`, `plecs.set`, `plecs.get`) | `references/rpc-api.md` |
