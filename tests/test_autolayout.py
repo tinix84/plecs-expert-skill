@@ -260,3 +260,50 @@ def test_new_tag_does_not_cover_an_existing_wire():
 
     assert not autolayout._tag_text_clear(sheet, "Goto", "Vdc", (200, 100), "right")
     assert autolayout._tag_text_clear(sheet, "Goto", "Vdc", (200, 200), "right")
+
+
+@pytest.mark.parametrize("direction", ["up", "right"])
+def test_dense_scope_receivers_route_without_fallback(direction):
+    nl = autolayout.Netlist()
+    nl.part("Scope", "Scope", {"@Axes": "3"}, at=(500, 200),
+            direction=direction, zone="output")
+    for index in range(3):
+        nl.part(f"S{index}", "Constant", at=(100, 100 + index * 100),
+                direction="right", zone="source")
+        nl.net(f"s{index}", "Signal", [(f"S{index}", 1), ("Scope", index + 1)],
+               tag=f"s{index}")
+
+    sheet, report = nl.layout(zones=["source", "output"])
+
+    assert report["connectivity"] == []
+    assert report["unrouted"] == []
+    assert [f for f in sheet.lint() if f.severity == "error"] == []
+
+
+def test_calibrated_block_missing_terminal_does_not_route_from_its_center():
+    nl = autolayout.Netlist()
+    nl.part("Scope", "Scope", {"@Axes": "1"})
+    nl.part("Ref", "Constant")
+    nl.net("bad_port", "Signal", [("Ref", 1), ("Scope", 2)])
+
+    with pytest.raises(ValueError, match="Scope: terminal 2 is missing"):
+        nl.layout()
+
+
+def test_rectifier_rails_and_measurement_ports_have_complete_clear_routes():
+    from example_rectifier import rectifier, ZONES
+
+    nl = rectifier()
+    sheet, report = nl.layout(zones=ZONES)
+    text = sheet.model("rectifier")
+
+    assert report["geometry_coverage"] == []
+    assert report["unrouted"] == []
+    assert report["connectivity"] == []
+    assert autolayout.check_connectivity(text, rectifier()) == []
+    assert sheet.lint() == []
+    schematic = plecs_file.schematic(plecs_file.parse(text))
+    components = {c.get("Name"): c for c in schematic.children_of("Component")}
+    for connection in schematic.children_of("Connection"):
+        for (a, _), (b, _) in autolayout.lint._segments(connection, components):
+            assert a[0] == b[0] or a[1] == b[1]

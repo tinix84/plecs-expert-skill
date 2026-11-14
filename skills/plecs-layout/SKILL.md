@@ -102,6 +102,11 @@ Generated names use a side without terminals, and generated Ground symbols hide 
 Routing reserves displayed text rectangles. New tags must also clear existing wires.
 These checks do not establish native PLECS visual acceptance.
 
+Use `role="rail"` in `Netlist.net` for shared electrical rails. The router reserves these nets before other connections.
+Use `row`, `col`, and `direction` hints to align bridge legs and vertical DC-link shunts.
+Dense signal receivers use spaced tag banks. Vertical tags put their text beside the wire path.
+An absent terminal in a calibrated block raises `ValueError`; it must not route from the block center.
+
 | Part | Draw it |
 |------|---------|
 | Voltage and current sources | Vertical, terminal 1 (+) on top: `Direction up`, `Flipped off` |

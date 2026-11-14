@@ -42,11 +42,15 @@ TAG_GAP = 20          # distance from a terminal to its tag block
 GROUND_DROP = 40      # a Ground sits this far below the lowest terminal of its net
 
 
-def _tag_text_clear(sheet, kind, tag, at, direction):
+def _tag_text_clear(sheet, kind, tag, at, direction, label="south"):
     tag_shape = geometry.shape(kind, at, direction, False, {})
     x0, y0, x1, y1 = tag_shape.box
     tag_text = geometry.estimate_text_box(
         tag, ((x0 + x1) / 2, y1 + geometry.TEXT_GAP + geometry.TEXT_HEIGHT / 2))
+    if label == "east":
+        width = tag_text[2] - tag_text[0]
+        tag_text = geometry.estimate_text_box(
+            tag, (x1 + geometry.TEXT_GAP + width / 2, (y0 + y1) / 2))
     root = pf.parse(sheet.model("tag-space"))
     schematic = pf.schematic(root)
     components = {c.get("Name"): c for c in schematic.children_of("Component")}
@@ -55,6 +59,8 @@ def _tag_text_clear(sheet, kind, tag, at, direction):
             continue
         shape = lint._shape(component)
         records, _ = lint.text_envelopes(component, shape)
+        if lint._rects_overlap(tag_shape.box, shape.box):
+            return False
         if lint._rects_overlap(tag_text, shape.box):
             return False
         for record in records:
@@ -129,6 +135,7 @@ class Net:
     kind: str                  # "Wire" or "Signal"
     pins: list                 # [(part, terminal)]; for signals the first pin drives the net
     tag: str | None = None
+    role: str | None = None     # "rail" reserves the shared electrical bus before branches
 
 
 @dataclass
@@ -175,8 +182,10 @@ class Netlist:
         self.parts[name] = p
         return p
 
-    def net(self, name, kind, pins, tag=None):
-        self.nets.append(Net(name, kind, list(pins), tag))
+    def net(self, name, kind, pins, tag=None, role=None):
+        if role not in (None, "rail") or (role == "rail" and kind != "Wire"):
+            raise ValueError("role must be None, or 'rail' for a Wire net")
+        self.nets.append(Net(name, kind, list(pins), tag, role))
 
     # ---- placement -------------------------------------------------------------
     def _neighbours(self):
@@ -434,6 +443,8 @@ class Netlist:
     def _terminal(self, part, term):
         p = self.parts[part]
         s = geometry.shape(p.kind, p.pos, p.direction, p.flipped, p.params)
+        if s.measured and str(term) not in s.terminals:
+            raise ValueError(f"{part}: terminal {term} is missing from calibrated {p.kind} geometry")
         return geometry.terminal(s, term, p.pos)
 
     def layout(self, zones=None, x0=100, y0=100, dx=80, dy=70, zone_gap=60, grid=5):
@@ -471,7 +482,7 @@ class Netlist:
             pts = [self._terminal(a, t) for a, t in n.pins]
             return max(x for x, _ in pts) - min(x for x, _ in pts) + max(y for _, y in pts) - min(y for _, y in pts)
 
-        for n in sorted(self.nets, key=span):
+        for n in sorted(self.nets, key=lambda n: (n.role != "rail", span(n))):
             pins = [(a, t, self._terminal(a, t)) for a, t in n.pins]
             direct = span(n) / grid
             trial = router.route(pins, commit=False) if not n.tag else None
@@ -524,7 +535,8 @@ class Netlist:
             ux, uy = (ex > cx) - (ex < cx), (ey > cy) - (ey < cy)
             if (ux, uy) == (0, 0):
                 ux = 1 if (driver or n.kind == "Wire") else -1
-            at = (snap(ex + ux * TAG_GAP), snap(ey + uy * TAG_GAP))
+            gap = TAG_GAP + (2 * router.margin if len(group) > 1 else 0)
+            at = (snap(ex + ux * gap), snap(ey + uy * gap))
             direction = {(1, 0): "right", (-1, 0): "left", (0, 1): "down", (0, -1): "up"}[(ux, uy)]
             if n.kind == "Wire":
                 kind, tag_dir = "Label", direction
@@ -533,17 +545,18 @@ class Netlist:
             else:
                 kind = "From"
                 tag_dir = {"right": "left", "left": "right", "down": "up", "up": "down"}[direction]
+            label = "east" if uy else "south"
             while (any(b[0] - 12 < at[0] < b[2] + 12 and b[1] - 10 < at[1] < b[3] + 10
                        for b in router.boxes.values())
-                   or not _tag_text_clear(sheet, kind, tag, at, tag_dir)):
+                   or not _tag_text_clear(sheet, kind, tag, at, tag_dir, label)):
                 at = (at[0] + ux * 10, at[1] + uy * 10)
             name = f"{tag}_{part}_{term}"
             if kind == "Label":
-                sheet.label(name, tag, at, LOCAL, tag_dir)
+                sheet.label(name, tag, at, LOCAL, tag_dir, label=label)
             elif kind == "Goto":
-                sheet.goto(name, tag, at, LOCAL, tag_dir)
+                sheet.goto(name, tag, at, LOCAL, tag_dir, label=label)
             else:
-                sheet.from_(name, tag, at, LOCAL, tag_dir)
+                sheet.from_(name, tag, at, LOCAL, tag_dir, label=label)
             shp = geometry.shape(kind, at, tag_dir, False, {})
             _routing_obstacles(router, sheet._comps[-1])
             tag_pin = (name, 1, geometry.terminal(shp, 1, at))
@@ -566,21 +579,50 @@ class Netlist:
             if (ux, uy) == (0, 0):
                 ux = 1 if driver else -1
             at = (snap(ex + ux * TAG_GAP), snap(ey + uy * TAG_GAP))
+            # Spread tags at dense receiver ports into a bank. Preserve port order
+            # along the side so short fanout wires do not cross each other.
+            if not driver:
+                neighbours = []
+                tag_width = len(tag) * geometry.TEXT_CHAR_WIDTH
+                for other_net in self.nets:
+                    if other_net.kind != "Signal":
+                        continue
+                    for other_part, other_term in other_net.pins[1:]:
+                        if other_part != part:
+                            continue
+                        other_tp = self._terminal(part, other_term)
+                        other_escape = router._escape(part, other_tp)
+                        a, b = router._pt(other_escape[0]), router._pt(other_escape[-1])
+                        side = ((b[0] > a[0]) - (b[0] < a[0]),
+                                (b[1] > a[1]) - (b[1] < a[1]))
+                        if side == (ux, uy):
+                            neighbours.append((other_tp[1] if ux else other_tp[0], str(other_term)))
+                            tag_width = max(tag_width, len(other_net.tag or other_net.name)
+                                            * geometry.TEXT_CHAR_WIDTH)
+                neighbours = sorted(set(neighbours))
+                if len(neighbours) > 1:
+                    index_in_bank = next(i for i, (_, t) in enumerate(neighbours) if t == str(term))
+                    center = (neighbours[0][0] + neighbours[-1][0]) / 2
+                    pitch = max(50, tag_width + 20)
+                    offset = (index_in_bank - (len(neighbours) - 1) / 2) * pitch
+                    at = ((at[0] + ux * 40, snap(center + offset)) if ux
+                          else (snap(center + offset), at[1] + uy * 40))
             direction = {(1, 0): "right", (-1, 0): "left", (0, 1): "down", (0, -1): "up"}[(ux, uy)]
             if driver:
                 tag_kind, tag_direction = "Goto", direction
             else:
                 tag_kind = "From"
                 tag_direction = {"right": "left", "left": "right", "down": "up", "up": "down"}[direction]
+            label = "east" if uy else "south"
             while (any(b[0] - 12 < at[0] < b[2] + 12 and b[1] - 10 < at[1] < b[3] + 10
                        for b in router.boxes.values())
-                   or not _tag_text_clear(sheet, tag_kind, tag, at, tag_direction)):
+                   or not _tag_text_clear(sheet, tag_kind, tag, at, tag_direction, label)):
                 at = (at[0] + ux * 10, at[1] + uy * 10)
             name = f"{tag}_{part}_{term}"
             if driver:
-                sheet.goto(name, tag, at, LOCAL, tag_direction)
+                sheet.goto(name, tag, at, LOCAL, tag_direction, label=label)
             else:
-                sheet.from_(name, tag, at, LOCAL, tag_direction)
+                sheet.from_(name, tag, at, LOCAL, tag_direction, label=label)
             shape = geometry.shape(tag_kind, at, tag_direction, False, {})
             _routing_obstacles(router, sheet._comps[-1])
             tag_pin = (name, 1, geometry.terminal(shape, 1, at))
