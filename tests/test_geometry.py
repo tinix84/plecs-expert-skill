@@ -203,3 +203,14 @@ def test_subsystem_shape_rejects_unverified_orientation():
     assert geometry.component_coverage_issue(component)["reason"] == (
         "Subsystem geometry is verified only for Direction up, Flipped off"
     )
+
+
+def test_text_estimate_inset_covers_measured_controller_label_dimensions():
+    # PLECS 4.9.8 at ZoomFactor 1; see the external visual-measurement worksheet.
+    measurements = {"Ref": (16, 8), "controller_output": (67, 9)}
+
+    for text, (measured_width, measured_height) in measurements.items():
+        x0, y0, x1, y1 = geometry.estimate_text_box(text, (0, 0))
+
+        assert measured_width <= (x1 - x0) - 2 * geometry.TEXT_MARGIN
+        assert measured_height <= (y1 - y0) - 2 * geometry.TEXT_MARGIN

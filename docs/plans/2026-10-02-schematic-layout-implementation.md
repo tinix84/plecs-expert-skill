@@ -350,8 +350,8 @@ after approval. Power-stage work remains outside this plan.
 | L06-L08 | Implemented | Connectivity difference checking, same-zone forced signal tags, text envelopes and preview reservations have regression coverage. |
 | L09-L11 | Implemented; dependent regressions rechecked | Deterministic controller placement, straight-wire/tag emission, report scoring and strict `accepted` status are integrated, including the verified Subsystem template form. Placement geometry uses the resolved controller orientation before reserving space; a right-oriented C-Script template regression verifies normalization to up. A connected four-port C-Script and unequal-size Subsystem chain pass layout checks. If forced local tags on adjacent multiport terminals overlap, layout raises `LayoutError` with `tag_spacing_conflict`; it does not return a colliding sheet. |
 | L12 | Implemented with stated limits | Nested sheet paths and local/global tag scopes are checked. Masked/code-generation visibility and automatic subsystem boundary traversal remain unsupported. |
-| L13 | Partial | The single-channel synthetic controller and connected two-channel C-Script controller were loaded and simulated in PLECS Standalone 4.9.8; final outputs were `1.0` and `[1.0, 2.0]`, respectively, within `1e-6` absolute tolerance. Sprint 2 also retained PLECS simulations for feedback and unequal-size Subsystem models. Their native GUI captures and screen-scale text comparisons remain outstanding, so visual acceptance is open. |
-| L14 | Documentation complete; visual gate pending | README, skill usage, conventions and controller spec were updated. The API and CLI examples rerun on 2026-10-03 both returned accepted/quality 0. The latest full suite passed (127 tests); all four skill validations and `git diff --check` passed. The controller milestone remains open until the required PLECS captures and text-scale checks are recorded for representative layouts. |
+| L13 | Partial | The single-channel synthetic controller and connected two-channel C-Script controller were loaded and simulated in PLECS Standalone 4.9.8; final outputs were `1.0` and `[1.0, 2.0]`, respectively, within `1e-6` absolute tolerance. Sprint 2 also retained PLECS simulations for feedback and unequal-size Subsystem models. A user-supplied full-sheet synthetic-controller capture now provides 1.00 schematic unit/screen-pixel scale and `Ref`/`controller_output` text bounds; both fit within the conservative estimate and no text collisions are visible. The native Subsystem coordinate view and feedback/unequal-Subsystem captures and measurements remain outstanding, so visual acceptance is open. |
+| L14 | Documentation complete; visual gate pending | README, skill usage, conventions and controller spec were updated. The API and CLI examples rerun on 2026-10-03 both returned accepted/quality 0. The latest full suite passed (128 tests); all four `agentskills validate` runs from the project virtual environment and `git diff --check` passed. The controller milestone remains open until the required PLECS captures and text-scale checks are recorded for representative layouts. |
 
 ### Closure evidence (2026-10-02)
 
@@ -457,3 +457,43 @@ after approval. Power-stage work remains outside this plan.
   L05 and L13/L14 remain partial until those visual checks are recorded.
 
 The power-stage improvement remains the separate follow-up described above. No Plexim demos, client models/data or generated calibration products were added.
+
+### Continuation verification (2026-10-03)
+
+- Rechecked the C1/L05 and C2/L13 implementation regressions: the focused geometry, controller,
+  lint and PLECS integration set passed (76 tests); the full suite passed (128 tests). Added a
+  geometry regression that checks measured `Ref` and `controller_output` label dimensions against
+  the estimator's interior after its 2 px margin. It does not check absolute glyph placement or
+  collisions. The integration cases, including controller, multiport,
+  unequal-Subsystem and feedback simulations, ran in this environment.
+- Ran the repository-required `agentskills validate` command from
+  `D:\codex-envs\plecs-expert-skill\Scripts\agentskills.exe` for all four skill directories;
+  each reported a valid skill. The documented controller API returned accepted with
+  weighted score 0, supported geometry and equivalent connectivity. The documented CLI returned
+  `accepted=True`, `quality=0`; its generated model and SVG are in
+  `D:\codex-envs\plecs-expert-skill\evidence\2026-10-03-layout-review\`.
+- `git diff --check` passed. These checks do not close the visual gates. The retained Subsystem
+  screenshot shows the unselected top-level demo sheet and cannot establish independent
+  frame/terminal pixel coordinates; no native Windows app surface is exposed for another capture.
+  A lossless crop of the user-supplied full-sheet `synthetic_controller` capture is retained beside
+  the external worksheet at
+  `D:\codex-envs\plecs-expert-skill\evidence\2026-10-03-layout-review\synthetic_controller_zoom-1.0-user-capture.png`:
+  its 10 px grid interval and known component positions confirm 1.00 schematic unit/screen pixel.
+  Dark text bounds are 16×8 px for `Ref` and 67×9 px for `controller_output`, within the current
+  reserved text envelopes; no collisions are visible. Feedback and unequal-Subsystem captures
+  remain outstanding. Keep L05, L13 and dependent L14 open until those artifacts are
+  recorded; do not claim C3 is complete from automated checks alone.
+
+### Power-circuit continuation (2026-10-30)
+
+The user selected power-circuit layout as the next priority. The controller visual gates remain open.
+
+- Automatic row spacing now reserves room for grounded pins and local Ground symbols.
+- Series meters select orientation from their electrical terminals. Signal outputs do not change that choice.
+- Generated names avoid terminal sides. Generated Ground symbols hide their names.
+- The electrical router reserves displayed text rectangles. New tags must clear existing wires.
+- Four regressions cover grounded phase rows, series ammeters, text clearance, and tag placement over existing wires.
+- The full suite passed with 125 tests. Seven integration tests skipped because PLECS XML-RPC was unavailable.
+- Native PLECS simulation and visual acceptance remain unverified. The full rectifier still needs dense-port and rail-routing work.
+
+The initial synthetic rectifier had nine unresolved routes and 66 lint errors. This continuation does not establish rectifier acceptance.
