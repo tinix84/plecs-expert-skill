@@ -1,0 +1,11 @@
+{
+  "name": "plecs-expert",
+  "displayName": "PLECS Expert",
+  "version": "0.1.0",
+  "description": "PLECS (Plexim) skills: .plecs grammar, component reference, readable schematic layout with Goto/From and Label tags, placement, routing and lint.",
+  "author": { "name": "Riccardo Tinivella", "url": "https://github.com/tinix84" },
+  "homepage": "https://github.com/tinix84/plecs-expert-skill",
+  "repository": "https://github.com/tinix84/plecs-expert-skill",
+  "license": "MIT",
+  "keywords": ["plecs", "plexim", "power-electronics", "simulation", "schematic"]
+}

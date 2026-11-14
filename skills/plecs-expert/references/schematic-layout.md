@@ -75,7 +75,7 @@ Connection {
 ## Verification loop (do every time)
 
 1. Load via XML-RPC (`plecs.load`), simulate a short run, read fault string.
-2. Capture the model window to PNG and look at it (`tools/shot_window.ps1`: Win32 `PrintWindow`, works when the window is covered, not when minimised).
+2. Capture the model window to PNG and inspect it. The repository helper `maintainer/shot_window.ps1` uses Win32 `PrintWindow` and requires a visible window.
 3. After a layout-only change, rerun the reference cases and compare numbers. Layout change must give identical results.
 
 ## Do not destroy the user's layout

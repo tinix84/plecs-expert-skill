@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+dist/
+.pytest_cache/
+docs/superpowers/plans/
+maintainer/geometry/build/
+dist/

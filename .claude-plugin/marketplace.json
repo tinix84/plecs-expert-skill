@@ -1,0 +1,12 @@
+{
+  "name": "plecs-expert-skill",
+  "description": "PLECS skills for Claude Code",
+  "owner": { "name": "Riccardo Tinivella", "url": "https://github.com/tinix84" },
+  "plugins": [
+    {
+      "name": "plecs-expert",
+      "source": "./",
+      "description": "PLECS grammar, components, schematic layout, placement, routing and lint"
+    }
+  ]
+}

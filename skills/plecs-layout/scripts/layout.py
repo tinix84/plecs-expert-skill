@@ -1,0 +1,224 @@
+"""Build readable PLECS schematics from Python (standard library only).
+
+    from layout import Sheet, Zone
+    sh = Sheet()
+    grid = Zone(x=100, y=100, dx=60, dy=60)            # one zone per role
+    sh.add("ACVoltageSource", "Va", grid.at(0, 0), direction="down", params={"V": "Vpk"})
+    sh.wire(("Va", 1), ("Ra", 1), via=[grid.at(0, -1), grid.at(1, -1)])
+    sh.goto("Vdc", tag="Vdc", at=(400, 300))           # tag instead of a long run
+    sh.from_("Vdc_scope", tag="Vdc", at=(700, 500))
+    text = sh.model("demo", init="Vpk = 230*sqrt(2);")
+    assert not [f for f in sh.lint() if f.severity == "error"]
+
+Every coordinate is snapped to the grid. Tags default to Visibility "2"
+(this schematic only).
+"""
+from __future__ import annotations
+
+import json
+import sys
+from copy import deepcopy
+from dataclasses import dataclass
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lint_schematic  # noqa: E402
+import plecs_file as pf  # noqa: E402
+
+LOCAL, GLOBAL = "2", "1"  # Goto/From/Label Visibility values
+
+
+def snap(v: float, grid: int = 5) -> int:
+    return int(round(v / grid) * grid)
+
+
+@dataclass
+class Zone:
+    """A block of the sheet laid out as a column/row grid, e.g. the power stage or the control area."""
+    x: int
+    y: int
+    dx: int = 60
+    dy: int = 60
+
+    def at(self, col: float, row: float) -> tuple[int, int]:
+        return (self.x + round(col * self.dx), self.y + round(row * self.dy))
+
+
+def _check_orthogonal(pts):
+    for a, b in zip(pts, pts[1:]):
+        if a[0] != b[0] and a[1] != b[1]:
+            raise ValueError(f"points {a} -> {b} are not horizontal or vertical")
+
+
+def hv(a, b):
+    """Corner for an L-shaped route: horizontal first, then vertical."""
+    return [(b[0], a[1])]
+
+
+def vh(a, b):
+    """Corner for an L-shaped route: vertical first, then horizontal."""
+    return [(a[0], b[1])]
+
+
+def _set_field(block, key, value):
+    for index, item in enumerate(block.items):
+        if isinstance(item, tuple) and item[0] == key:
+            block.items[index] = (key, value)
+            return
+    block.items.append((key, value))
+
+
+class Sheet:
+    def __init__(self, grid: int = 5):
+        self.grid = grid
+        self._comps: list[str] = []
+        self._conns: list[str] = []
+        self.names: set[str] = set()
+
+    def _pt(self, p, snap_position=True):
+        if snap_position:
+            return (snap(p[0], self.grid), snap(p[1], self.grid))
+        return tuple(int(value) if int(value) == value else value for value in p)
+
+    def _add(self, kind: str, name: str, at, direction: str = "right", flipped: bool = False,
+             params: dict | None = None, label: str = "north", show_name: bool = True,
+             snap_position: bool = True) -> str:
+        if name in self.names:
+            raise ValueError(f"duplicate component name {name!r}")
+        self.names.add(name)
+        x, y = self._pt(at, snap_position)
+        body = [
+            "Component {", f"  Type          {kind}", f"  Name          {json.dumps(name)}",
+            f"  Show          {'on' if show_name else 'off'}", f"  Position      [{x}, {y}]",
+            f"  Direction     {direction}", f"  Flipped       {'on' if flipped else 'off'}",
+            f"  LabelPosition {label}",
+        ]
+        for var, val in (params or {}).items():
+            if var.startswith("@"):
+                body.append(f"  {var[1:]:<13} {json.dumps(str(val))}")
+                continue
+            body += ["  Parameter {", f"    Variable      {json.dumps(var)}",
+                     f"    Value         {json.dumps(str(val))}", "    Show          off", "  }"]
+        self._comps.append("\n".join(body + ["}"]))
+        return name
+
+    def add(self, kind: str, name: str, at, direction: str = "right", flipped: bool = False,
+            params: dict | None = None, label: str = "north", show_name: bool = True) -> str:
+        return self._add(kind, name, at, direction, flipped, params, label, show_name)
+
+    def add_component(self, component: pf.Block, *, at=None, direction=None, flipped=None) -> str:
+        """Copy a parsed Component, changing only its requested layout fields."""
+        if component.kind != "Component":
+            raise ValueError("add_component requires a parsed Component block")
+        name = component.get("Name")
+        if not name or not component.get("Type"):
+            raise ValueError("component template must have a Name and Type")
+        if name in self.names:
+            raise ValueError(f"duplicate component name {name!r}")
+
+        copied = deepcopy(component)
+        if at is not None:
+            x, y = self._pt(at)
+            _set_field(copied, "Position", f"[{x}, {y}]")
+        if direction is not None:
+            _set_field(copied, "Direction", str(direction))
+        if flipped is not None:
+            _set_field(copied, "Flipped", "on" if flipped else "off")
+        self.names.add(name)
+        self._comps.append(pf.dump(copied).rstrip())
+        return name
+
+    def goto(self, name, tag, at, visibility=LOCAL, direction="right", label="south"):
+        return self.add("Goto", name, at, direction, params={"Tag": tag, "Visibility": visibility},
+                        label=label, show_name=False)
+
+    def from_(self, name, tag, at, visibility=LOCAL, direction="right", label="south"):
+        return self.add("From", name, at, direction, params={"Tag": tag, "Visibility": visibility},
+                        label=label, show_name=False)
+
+    def _generated_tag(self, kind, name, tag, at, direction="right", label="south"):
+        """Emit a controller-generated tag at its exact port-stub position."""
+        if kind not in {"Goto", "From"}:
+            raise ValueError("generated controller tags must be Goto or From blocks")
+        return self._add(kind, name, at, direction, params={"Tag": tag, "Visibility": LOCAL},
+                         label=label, show_name=False, snap_position=False)
+
+    def label(self, name, tag, at, visibility=LOCAL, direction="right"):
+        """Electrical Label: joins electrical nets that carry the same tag."""
+        return self.add("Label", name, at, direction, params={"Tag": tag, "Visibility": visibility},
+                        label="south", show_name=False)
+
+    def _connection(self, kind, src, dst_list, via):
+        sname, sterm = src
+        lines = ["Connection {", f"  Type          {kind}", f"  SrcComponent  {json.dumps(sname)}",
+                 f"  SrcTerminal   {sterm}"]
+        pts = [self._pt(p) for p in via or []]
+        _check_orthogonal(pts)
+        if pts:
+            lines.append("  Points        [" + "; ".join(f"{x}, {y}" for x, y in pts) + "]")
+        if len(dst_list) == 1 and len(dst_list[0]) == 2:
+            dname, dterm = dst_list[0]
+            lines += [f"  DstComponent  {json.dumps(dname)}", f"  DstTerminal   {dterm}"]
+        else:
+            for d in dst_list:
+                dname, dterm, *bvia = d
+                bpts = [self._pt(p) for p in (bvia[0] if bvia else [])]
+                # A branch starts at the junction, the parent's last Point.
+                _check_orthogonal(pts[-1:] + bpts)
+                lines.append("  Branch {")
+                if bpts:
+                    lines.append("    Points        [" + "; ".join(f"{x}, {y}" for x, y in bpts) + "]")
+                lines += [f"    DstComponent  {json.dumps(dname)}", f"    DstTerminal   {dterm}", "  }"]
+        self._conns.append("\n".join(lines + ["}"]))
+
+    def wire(self, src, dst, via=None):
+        """Electrical wire. dst is (name, terminal) or a list of (name, terminal[, branch_points])."""
+        self._connection("Wire", src, dst if isinstance(dst, list) else [dst], via)
+
+    def signal(self, src, dst, via=None):
+        """Signal line. Same arguments as wire()."""
+        self._connection("Signal", src, dst if isinstance(dst, list) else [dst], via)
+
+    def connect_tree(self, kind: str, src, tree: dict):
+        """Write a routed net (router.Route.tree) as one connection with nested Branch blocks."""
+        sname, sterm = src
+
+        def body(node, pad):
+            out = []
+            if node["points"]:
+                out.append(pad + "Points        [" + "; ".join(f"{x}, {y}" for x, y in node["points"]) + "]")
+            if node["dst"]:
+                out += [pad + f"DstComponent  {json.dumps(node['dst'][0])}", pad + f"DstTerminal   {node['dst'][1]}"]
+            for b in node["branches"]:
+                out += [pad + "Branch {"] + body(b, pad + "  ") + [pad + "}"]
+            return out
+
+        lines = ["Connection {", f"  Type          {kind}", f"  SrcComponent  {json.dumps(sname)}",
+                 f"  SrcTerminal   {sterm}"] + body(tree, "  ") + ["}"]
+        self._conns.append("\n".join(lines))
+
+    def schematic(self) -> str:
+        body = "\n".join(self._comps + self._conns)
+        inner = "\n".join("    " + line for line in body.splitlines())
+        return "  Schematic {\n    Location      [0, 26; 1200, 800]\n    ZoomFactor    1\n" + inner + "\n  }\n"
+
+    def model(self, name: str, init: str = "", time_span: str = "0.1", outputs: int = 0) -> str:
+        """Full model text. `outputs` declares model-level output ports, which XML-RPC
+        plecs.simulate returns; place matching Output blocks with Index 1..outputs."""
+        init_q = json.dumps(init)
+        terminals = "".join(f'  Terminal {{\n    Type          Output\n    Index         "{i}"\n  }}\n'
+                            for i in range(1, outputs + 1))
+        return (
+            "Plecs {\n"
+            f"  Name          {json.dumps(name)}\n"
+            '  Version       "4.7"\n'
+            '  CircuitModel  "ContStateSpace"\n'
+            '  StartTime     "0.0"\n'
+            f"  TimeSpan      {json.dumps(time_span)}\n"
+            '  Solver        "auto"\n'
+            f"  InitializationCommands {init_q}\n"
+            + terminals + self.schematic() + "}\n"
+        )
+
+    def lint(self):
+        return lint_schematic.lint_text(self.model("lint"), self.grid)

@@ -28,8 +28,9 @@ from pathlib import Path
 import httpx
 from bs4 import BeautifulSoup, Tag
 
-SKILL_ROOT = Path(__file__).resolve().parent.parent
-MANIFEST_PATH = SKILL_ROOT / "manifest.json"
+MAINTAINER_DIR = Path(__file__).resolve().parent
+REPO_ROOT = MAINTAINER_DIR.parent
+MANIFEST_PATH = MAINTAINER_DIR / "manifest.json"
 
 BEGIN_RE = re.compile(r"<!--\s*BEGIN VERBATIM TABLE:\s*(?P<slug>[^\s-]+)\s*-->")
 END_RE = re.compile(r"<!--\s*END VERBATIM TABLE:\s*(?P<slug>[^\s-]+)\s*-->")
@@ -178,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     failures: list[str] = []
     for rel_file, entry in manifest["files"].items():
-        target = SKILL_ROOT / rel_file
+        target = REPO_ROOT / rel_file
         all_hashes: dict[str, str] = {}
         for url in entry["source_urls"]:
             try:
