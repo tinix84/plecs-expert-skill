@@ -96,6 +96,12 @@ A rejected report must not be treated as a finished drawing.
 
 ## Drawing conventions
 
+The electrical placer increases automatic row spacing when grounded pins need room for local Ground symbols.
+Fixed positions remain unchanged. Series meters use their electrical terminals to select orientation.
+Generated names use a side without terminals, and generated Ground symbols hide their names.
+Routing reserves displayed text rectangles. New tags must also clear existing wires.
+These checks do not establish native PLECS visual acceptance.
+
 | Part | Draw it |
 |------|---------|
 | Voltage and current sources | Vertical, terminal 1 (+) on top: `Direction up`, `Flipped off` |

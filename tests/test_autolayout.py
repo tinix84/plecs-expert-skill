@@ -201,3 +201,62 @@ def test_connectivity_check_ignores_second_connection_on_a_terminal():
             'Connection {\n Type Signal\n SrcComponent "A"\n SrcTerminal 2\n DstComponent "C"\n DstTerminal 1\n}\n')
     two = re.sub(r"    Connection \{.*?\n    \}\n", "", two, flags=re.S).replace("  }\n}\n", body + "  }\n}\n")
     assert autolayout.check_connectivity(two, nl)
+
+
+def test_grounded_phase_rows_leave_room_for_each_ground():
+    nl = autolayout.Netlist()
+    for phase in "abc":
+        nl.part(f"V{phase}", "ACVoltageSource", zone="source")
+        nl.part(f"R{phase}", "Resistor", zone="load")
+        nl.net(f"line_{phase}", "Wire", [(f"V{phase}", 1), (f"R{phase}", 1)])
+    nl.part("Gnd", "Ground", zone="source")
+    nl.net("neutral", "Wire", [(f"V{phase}", 2) for phase in "abc"]
+           + [(f"R{phase}", 2) for phase in "abc"] + [("Gnd", 1)])
+
+    sheet, report = nl.layout(zones=["source", "load"])
+
+    assert report["unrouted"] == []
+    assert report["connectivity"] == []
+    assert [finding for finding in sheet.lint() if finding.severity == "error"] == []
+    schematic = plecs_file.schematic(plecs_file.parse(sheet.model("phases")))
+    grounds = [c for c in schematic.children_of("Component") if c.get("Type") == "Ground"]
+    assert len(grounds) == 6
+    assert all(c.get("Show") == "off" for c in grounds)
+
+
+def test_series_ammeter_faces_the_electrical_chain():
+    nl = autolayout.Netlist()
+    nl.part("Left", "Resistor", at=(100, 100))
+    meter = nl.part("Meter", "Ammeter", at=(250, 100))
+    nl.part("Right", "Resistor", at=(400, 100))
+    nl.net("in", "Wire", [("Left", 2), ("Meter", 1)])
+    nl.net("out", "Wire", [("Meter", 2), ("Right", 1)])
+    nl._orient()
+
+    terminals = geometry.shape(meter.kind, meter.pos, meter.direction, meter.flipped).terminals
+    assert terminals["1"][0] < meter.pos[0] < terminals["2"][0]
+    assert terminals["1"][1] == terminals["2"][1] == meter.pos[1]
+
+
+def test_router_keeps_wires_out_of_displayed_names():
+    nl = autolayout.Netlist()
+    nl.part("A", "Gain", at=(100, 100))
+    nl.part("B", "Gain", at=(400, 100))
+    nl.part("Keepout", "Gain", at=(250, 125))
+    nl.net("signal", "Signal", [("A", 2), ("B", 1)])
+
+    sheet, report = nl.layout()
+
+    assert report["unrouted"] == []
+    assert report["connectivity"] == []
+    assert [finding for finding in sheet.lint() if finding.severity == "error"] == []
+
+
+def test_new_tag_does_not_cover_an_existing_wire():
+    sheet = autolayout.Sheet()
+    sheet.add("Gain", "A", (100, 100))
+    sheet.add("Gain", "B", (300, 100))
+    sheet.signal(("A", 2), ("B", 1))
+
+    assert not autolayout._tag_text_clear(sheet, "Goto", "Vdc", (200, 100), "right")
+    assert autolayout._tag_text_clear(sheet, "Goto", "Vdc", (200, 200), "right")

@@ -49,6 +49,7 @@ def _tag_text_clear(sheet, kind, tag, at, direction):
         tag, ((x0 + x1) / 2, y1 + geometry.TEXT_GAP + geometry.TEXT_HEIGHT / 2))
     root = pf.parse(sheet.model("tag-space"))
     schematic = pf.schematic(root)
+    components = {c.get("Name"): c for c in schematic.children_of("Component")}
     for component in schematic.children_of("Component"):
         if component.position is None:
             continue
@@ -61,7 +62,40 @@ def _tag_text_clear(sheet, kind, tag, at, direction):
                 return False
             if lint._rects_overlap(tag_text, record["box"]):
                 return False
+    for connection in schematic.children_of("Connection"):
+        for (a, _), (b, _) in lint._segments(connection, components):
+            if (lint._seg_hits_rect(a, b, tag_shape.box)
+                    or lint._seg_hits_rect(a, b, tag_text)):
+                return False
     return True
+
+
+def _routing_obstacles(router, component_text):
+    component = pf.parse(component_text).child("Component")
+    shape = lint._shape(component)
+    name = component.get("Name")
+    box = shape.box
+    if not shape.measured and component.get("Type") in {"Goto", "From", "Label"}:
+        x, y = component.position
+        box = (x - 10, y - 8, x + 10, y + 8)
+    router.add_obstacle(name, box)
+    records, _ = lint.text_envelopes(component, shape)
+    for index, record in enumerate(records):
+        router.boxes[(name, "text", index)] = record["box"]
+
+
+def _name_side(shape):
+    """Keep a generated name away from the component's terminal escape paths."""
+    x0, y0, x1, y1 = shape.box
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    occupied = set()
+    for x, y in shape.terminals.values():
+        if abs(x - cx) / max(x1 - x0, 1) >= abs(y - cy) / max(y1 - y0, 1):
+            occupied.add("east" if x > cx else "west")
+        else:
+            occupied.add("south" if y > cy else "north")
+    return next((side for side in ("north", "east", "west", "south")
+                 if side not in occupied), "north")
 
 # Drawing conventions: this terminal faces this side. Sources stand vertical with terminal 1
 # (+) on top; Ground has its terminal on top, so the symbol points down.
@@ -226,6 +260,13 @@ class Netlist:
 
     def _place(self, zones, x0, y0, dx, dy, zone_gap):
         nb = self._neighbours()
+        # Reserve the source's body, its local Ground and the next row's name.
+        for name, terminal in self._grounded_pins():
+            part = self.parts[name]
+            shape = geometry.shape(part.kind, (0, 0), part.direction, part.flipped, part.params)
+            if shape.measured and terminal in shape.terminals:
+                bottom = shape.terminals[terminal][1] + GROUND_DROP + 20
+                dy = max(dy, snap(bottom - shape.box[1] + geometry.TEXT_HEIGHT + 20))
         # series chains give rows (and column order) to parts without hints
         auto_row, auto_col = {}, {}
         for r, chain in enumerate(self._chains()):
@@ -368,13 +409,18 @@ class Netlist:
             if p.oriented:
                 continue
             base = geometry.shape(p.kind, p.pos, p.direction, p.flipped, p.params)
-            if not base.measured or len(base.terminals) != 2:
+            electrical = {str(t) for n in self.nets if n.kind == "Wire"
+                          for name, t in n.pins if name == p.name}
+            terminals = electrical or set(base.terminals)
+            if not base.measured or len(terminals) != 2:
                 continue
 
             def cost(o):
                 s = geometry.shape(p.kind, p.pos, o[0], o[1], p.params)
                 total = 0
                 for t, tp in s.terminals.items():
+                    if t not in terminals:
+                        continue
                     for n in pin_nets[(p.name, t)]:
                         for other, _ in n.pins:
                             if other != p.name:
@@ -394,8 +440,8 @@ class Netlist:
         zones = zones or sorted({p.zone for p in self.parts.values()})
         original = Netlist(dict(self.parts), list(self.nets))
         self.report_unrouted = []
-        self._place(zones, x0, y0, dx, dy, zone_gap)
         self._style()
+        self._place(zones, x0, y0, dx, dy, zone_gap)
         self._orient()
         self._split_grounds()
         sheet = Sheet(grid)
@@ -404,8 +450,10 @@ class Netlist:
             if p.component is not None:
                 sheet.add_component(p.component, at=p.pos, direction=p.direction, flipped=p.flipped)
             else:
-                sheet.add(p.kind, p.name, p.pos, p.direction, p.flipped, p.params)
-            router.add_obstacle(p.name, geometry.shape(p.kind, p.pos, p.direction, p.flipped, p.params).box)
+                shape = geometry.shape(p.kind, p.pos, p.direction, p.flipped, p.params)
+                sheet.add(p.kind, p.name, p.pos, p.direction, p.flipped, p.params,
+                          label=_name_side(shape), show_name=p.kind != "Ground")
+            _routing_obstacles(router, sheet._comps[-1])
 
         geometry_coverage = []
         for p in sorted(self.parts.values(), key=lambda part: part.name):
@@ -497,7 +545,7 @@ class Netlist:
             else:
                 sheet.from_(name, tag, at, LOCAL, tag_dir)
             shp = geometry.shape(kind, at, tag_dir, False, {})
-            router.add_obstacle(name, shp.box if shp.measured else (at[0] - 10, at[1] - 8, at[0] + 10, at[1] + 8))
+            _routing_obstacles(router, sheet._comps[-1])
             tag_pin = (name, 1, geometry.terminal(shp, 1, at))
             # one routed tree per zone: the group's pins plus its tag; a From drives its group
             ends = [tag_pin] + group if kind == "From" else group + [tag_pin]
@@ -534,8 +582,7 @@ class Netlist:
             else:
                 sheet.from_(name, tag, at, LOCAL, tag_direction)
             shape = geometry.shape(tag_kind, at, tag_direction, False, {})
-            box = shape.box if shape.measured else (at[0] - 10, at[1] - 8, at[0] + 10, at[1] + 8)
-            router.add_obstacle(name, box)
+            _routing_obstacles(router, sheet._comps[-1])
             tag_pin = (name, 1, geometry.terminal(shape, 1, at))
             ends = [(part, term, tp), tag_pin] if driver else [tag_pin, (part, term, tp)]
             route = router.route(ends)
