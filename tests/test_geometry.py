@@ -214,3 +214,11 @@ def test_text_estimate_inset_covers_measured_controller_label_dimensions():
 
         assert measured_width <= (x1 - x0) - 2 * geometry.TEXT_MARGIN
         assert measured_height <= (y1 - y0) - 2 * geometry.TEXT_MARGIN
+
+
+def test_three_input_mux_has_four_distinct_measured_terminals():
+    # Retained calibration PDF: the input arrows lie inside the narrow Mux body.
+    shape = geometry.shape("SignalMux", (0, 0), params={"Width": "3"})
+    assert shape.measured
+    assert shape.terminals == {"1": (10, 0), "2": (-5, -10),
+                               "3": (-5, 0), "4": (-5, 10)}

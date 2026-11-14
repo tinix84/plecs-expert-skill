@@ -104,7 +104,7 @@ def _merge(rects, gap=6):
     return out
 
 
-def classify(items, symbol_box=None):
+def classify(items, symbol_box=None, internal_ports=False):
     """Split a cell's drawings into symbol parts, terminal circles, and signal port markers.
 
     symbol_box: outline to test port markers against; pass the unconnected cell's box for a
@@ -127,7 +127,8 @@ def classify(items, symbol_box=None):
     if symbol_box is None and body:
         symbol_box = (min(r[0] for r in body), min(r[1] for r in body),
                       max(r[2] for r in body), max(r[3] for r in body))
-    if symbol_box:
+    # Mux/Demux input arrows can lie inside the narrow bar. They are still ports.
+    if symbol_box and not internal_ports:
         x0, y0, x1, y1 = symbol_box
         outside = [r for r in ports if r[0] < x0 - 0.5 or r[2] > x1 + 0.5 or r[1] < y0 - 0.5 or r[3] > y1 + 0.5]
         body += [r for r in ports if r not in outside]
@@ -252,7 +253,8 @@ def main(argv=None):
             continue
         measured = {}
         for o, c in g["orient"].items():
-            body, circles, ports = classify(cell_items(drawings, frame, c["position"]))
+            body, circles, ports = classify(cell_items(drawings, frame, c["position"]),
+                                            internal_ports=kind in {"SignalMux", "SignalDemux"})
             allr = body + circles + ports
             if not allr:
                 problems.append(f"{kind}/{variant} {o}: nothing drawn")
@@ -267,7 +269,8 @@ def main(argv=None):
             continue
         named = {}
         bc = g["orient"]["right/off"]
-        bbody, bcirc, bport = classify(cell_items(drawings, frame, bc["position"]))
+        bbody, bcirc, bport = classify(cell_items(drawings, frame, bc["position"]),
+                                     internal_ports=kind in {"SignalMux", "SignalDemux"})
         bbox = (min(r[0] for r in bbody), min(r[1] for r in bbody),
                 max(r[2] for r in bbody), max(r[3] for r in bbody)) if bbody else None
         base_markers = marker_keys(bcirc, bport)
@@ -275,7 +278,8 @@ def main(argv=None):
         for num, c in sorted(g["numbered"].items()):
             items = cell_items(drawings, frame, c["position"],
                                exclude=[tuple(c["numbered"]["partner_position"])])
-            _, ncirc, nport = classify(items, bbox)
+            _, ncirc, nport = classify(items, bbox,
+                                      internal_ports=kind in {"SignalMux", "SignalDemux"})
             now = marker_keys(ncirc, nport)
             # a connected terminal loses its open-terminal disc, or (signal ports) its arrow changes
             # shape; disc sizes vary with print quantisation, so only port sizes are compared

@@ -143,10 +143,10 @@ class Sheet:
         return self._add(kind, name, at, direction, params={"Tag": tag, "Visibility": LOCAL},
                          label=label, show_name=False, snap_position=False)
 
-    def label(self, name, tag, at, visibility=LOCAL, direction="right"):
+    def label(self, name, tag, at, visibility=LOCAL, direction="right", label="south"):
         """Electrical Label: joins electrical nets that carry the same tag."""
         return self.add("Label", name, at, direction, params={"Tag": tag, "Visibility": visibility},
-                        label="south", show_name=False)
+                        label=label, show_name=False)
 
     def _connection(self, kind, src, dst_list, via):
         sname, sterm = src

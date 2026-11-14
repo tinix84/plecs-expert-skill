@@ -26,32 +26,38 @@ def rectifier() -> Netlist:
         nl.part(f"R{ph}", "Resistor", {"R": "10e-3"}, zone="line")
         nl.part(f"L{ph}", "Inductor", {"L": "100e-6", "i_init": "0"}, zone="line")
         nl.part(f"Am{ph}", "Ammeter", zone="line")
-        nl.part(f"D{ph}p", "Diode", {"Vf": "0", "Ron": "0"}, zone="bridge")   # upper diode
-        nl.part(f"D{ph}n", "Diode", {"Vf": "0", "Ron": "0"}, zone="bridge")   # lower diode
+        nl.part(f"D{ph}p", "Diode", {"Vf": "0", "Ron": "0"}, zone="bridge",
+                row=0, col=i, direction="down")   # cathode faces the positive rail
+        nl.part(f"D{ph}n", "Diode", {"Vf": "0", "Ron": "0"}, zone="bridge",
+                row=2, col=i, direction="down")   # anode faces the negative rail
         nl.net(f"{ph}1", "Wire", [(f"V{ph}", 1), (f"R{ph}", 1)])
         nl.net(f"{ph}2", "Wire", [(f"R{ph}", 2), (f"L{ph}", 1)])
         nl.net(f"{ph}3", "Wire", [(f"L{ph}", 2), (f"Am{ph}", 1)])
         pins = [(f"Am{ph}", 2), (f"D{ph}p", 1), (f"D{ph}n", 2)]
         if ph == "a":
             pins.append(("Van", 1))
-        nl.net(f"p{ph}", "Wire", pins, tag="pa" if ph == "a" else None)
+        nl.net(f"p{ph}", "Wire", pins, tag=f"p{ph}")
     nl.part("Gnd", "Ground", zone="source")
-    nl.part("Cdc", "Capacitor", {"C": "2e-3", "v_init": "0"}, zone="dclink")
-    nl.part("Rload", "Resistor", {"R": "20"}, zone="dclink")
-    nl.part("Vdc", "Voltmeter", zone="dclink")
+    nl.part("Cdc", "Capacitor", {"C": "2e-3", "v_init": "0"}, zone="dclink",
+            row=1, col=0, direction="up")
+    nl.part("Rload", "Resistor", {"R": "20"}, zone="dclink",
+            row=1, col=1, direction="up")
+    nl.part("Vdc", "Voltmeter", zone="dclink", row=1, col=3, direction="up")
     nl.part("Van", "Voltmeter", zone="measure")
     nl.part("Ref", "Constant", {"Value": "540"}, zone="control")
-    nl.part("Err", "Sum", {"IconShape": "2", "Inputs": "|+-"}, zone="control")
+    nl.part("Err", "Sum", {"IconShape": "1", "Inputs": "+-"}, zone="control",
+            direction="up")
     nl.part("Kp", "Gain", {"K": "0.1"}, zone="control")
     nl.part("Lim", "Saturation", {"UpperLimit": "1", "LowerLimit": "-1"}, zone="control")
-    nl.part("Kia", "Gain", {"K": "1"}, zone="control")
-    nl.part("Mux", "SignalMux", {"Width": "3"}, zone="output")
-    nl.part("Scope", "Scope", {"@Axes": "3"}, zone="output")
+    nl.part("Kia", "Gain", {"K": "1"}, zone="control", direction="right")
+    nl.part("Mux", "SignalMux", {"Width": "3"}, zone="output", row=2, col=0)
+    nl.part("Scope", "Scope", {"@Axes": "3"}, zone="output", row=1, col=3,
+            direction="up")
     nl.part("Out", "Output", {"Index": "1", "Width": "-1"}, zone="output")
 
     nl.net("neutral", "Wire", [("Va", 2), ("Vb", 2), ("Vc", 2), ("Van", 2), ("Gnd", 1)])
-    nl.net("dcp", "Wire", [("Dap", 2), ("Dbp", 2), ("Dcp", 2), ("Cdc", 1), ("Rload", 1), ("Vdc", 1)], tag="dcp")
-    nl.net("dcn", "Wire", [("Dan", 1), ("Dbn", 1), ("Dcn", 1), ("Cdc", 2), ("Rload", 2), ("Vdc", 2)], tag="dcn")
+    nl.net("dcp", "Wire", [("Dap", 2), ("Dbp", 2), ("Dcp", 2), ("Cdc", 1), ("Rload", 1), ("Vdc", 1)], tag="dcp", role="rail")
+    nl.net("dcn", "Wire", [("Dan", 1), ("Dbn", 1), ("Dcn", 1), ("Cdc", 2), ("Rload", 2), ("Vdc", 2)], tag="dcn", role="rail")
     nl.net("vdc", "Signal", [("Vdc", 3), ("Err", 2), ("Scope", 1), ("Out", 1)], tag="Vdc")
     nl.net("ref", "Signal", [("Ref", 1), ("Err", 3)])
     nl.net("err", "Signal", [("Err", 1), ("Kp", 1)])
